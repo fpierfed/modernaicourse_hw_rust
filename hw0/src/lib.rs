@@ -19,6 +19,7 @@
  *
  * Implement a function that adds together its two arguments.
  */
+use std::cmp::max;
 
 /// Add x and y
 ///
@@ -29,7 +30,7 @@
 /// Output:
 ///     f64, addition of x and y
 pub fn add(a: f64, b: f64) -> f64 {
-    todo!()
+    a + b
 }
 
 /*
@@ -52,7 +53,33 @@ pub fn add(a: f64, b: f64) -> f64 {
 /// Output:
 ///     list of primes up to (not including) n
 pub fn primes(n: u64) -> Vec<u64> {
-    todo!()
+    if n < 2 {
+        return vec![];
+    }
+    let sqrtn = (n as f64).sqrt();
+    let mut temp: Vec<bool> = vec![true; (n + 1) as usize];
+    temp[0] = false;
+    temp[1] = false;
+    temp[n as usize] = false;
+
+    let mut i = 2;
+    let mut j;
+    let n = n as usize;
+    while (i as f64) < sqrtn {
+        if temp[i] {
+            j = i * i;
+            while j < n {
+                temp[j] = false;
+                j += i;
+            }
+        }
+        i += 1;
+    }
+    temp.iter()
+        .enumerate()
+        .filter(|(_, &val)| val)
+        .map(|(i, _)| i as u64)
+        .collect()
 }
 
 /*
@@ -126,7 +153,18 @@ impl Polynomial {
 /// Output:
 ///     Polynomial corresponding to the addition of p1 and p2
 pub fn poly_add(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
-    todo!()
+    let max_len = max(p1.coefficients.len(), p2.coefficients.len());
+    let mut coefficients = vec![0.0; max_len];
+
+    for (i, el) in p1.coefficients.iter().enumerate() {
+        coefficients[i] += el;
+    }
+
+    for (i, el) in p2.coefficients.iter().enumerate() {
+        coefficients[i] += el;
+    }
+
+    Polynomial::new(coefficients)
 }
 
 /*
@@ -151,7 +189,17 @@ pub fn poly_add(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
 /// Output:
 ///     Polynomial corresponding to the multiplication of p1 and p2
 pub fn poly_mul(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
-    todo!()
+    let len_p1 = p1.coefficients.len();
+    let len_p2 = p2.coefficients.len();
+    let mut coefficients = vec![0.0; len_p1 * len_p2];
+
+    for i in 0..len_p1 {
+        for j in 0..len_p2 {
+            coefficients[i + j] += p1.coefficients[i] * p2.coefficients[j];
+        }
+    }
+
+    Polynomial::new(coefficients)
 }
 
 /*
@@ -174,5 +222,9 @@ pub fn poly_mul(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
 /// Output:
 ///     Polynomial corresponding to the derivative of p with respect to x
 pub fn poly_derivative(p: &Polynomial) -> Polynomial {
-    todo!()
+    let mut coefficients: Vec<f64> = (1..p.coefficients.len())
+        .map(|i| p.coefficients[i] * i as f64)
+        .collect();
+    coefficients.push(0.0);
+    Polynomial::new(coefficients)
 }
