@@ -1,5 +1,96 @@
 use hw1::*;
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Array4};
+
+mod mnist {
+    use flate2::read::GzDecoder;
+    use hf_hub::api::sync::Api;
+    use ndarray::Array2;
+    use std::io::Read;
+
+    pub struct MnistData {
+        pub images: Vec<Array2<f32>>,
+        pub targets: Vec<u8>,
+    }
+
+    fn parse_idx_images(data: &[u8]) -> Vec<Array2<f32>> {
+        let magic = u32::from_be_bytes(data[0..4].try_into().unwrap());
+        assert_eq!(magic, 2051);
+        let n_images = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+        let rows = u32::from_be_bytes(data[8..12].try_into().unwrap()) as usize;
+        let cols = u32::from_be_bytes(data[12..16].try_into().unwrap()) as usize;
+        let pixels = &data[16..];
+        (0..n_images)
+            .map(|i| {
+                let start = i * rows * cols;
+                let raw: Vec<f32> = pixels[start..start + rows * cols]
+                    .iter()
+                    .map(|&p| p as f32 / 255.0)
+                    .collect();
+                Array2::from_shape_vec((rows, cols), raw).unwrap()
+            })
+            .collect()
+    }
+
+    fn parse_idx_labels(data: &[u8]) -> Vec<u8> {
+        let magic = u32::from_be_bytes(data[0..4].try_into().unwrap());
+        assert_eq!(magic, 2049);
+        let n_labels = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
+        data[8..8 + n_labels].to_vec()
+    }
+
+    fn download_and_decompress(repo: &hf_hub::api::sync::ApiRepo, filename: &str) -> Vec<u8> {
+        let path = repo.get(filename).unwrap_or_else(|e| {
+            panic!("Failed to download {filename}: {e}");
+        });
+        let compressed = std::fs::read(&path).unwrap();
+        let mut decoder = GzDecoder::new(&compressed[..]);
+        let mut decompressed = Vec::new();
+        decoder.read_to_end(&mut decompressed).unwrap();
+        decompressed
+    }
+
+    pub fn load_mnist_zero_one() -> MnistData {
+        let api = Api::new().unwrap();
+        let repo = api.dataset("ylecun/mnist".to_string());
+
+        let image_data = download_and_decompress(&repo, "train-images-idx3-ubyte.gz");
+        let label_data = download_and_decompress(&repo, "train-labels-idx1-ubyte.gz");
+
+        let all_images = parse_idx_images(&image_data);
+        let all_labels = parse_idx_labels(&label_data);
+
+        let mut images = Vec::new();
+        let mut targets = Vec::new();
+        for (img, &label) in all_images.into_iter().zip(all_labels.iter()) {
+            if label == 0 || label == 1 {
+                images.push(img);
+                targets.push(label);
+            }
+        }
+
+        MnistData { images, targets }
+    }
+}
+
+#[test]
+fn test_classify_zero_one() {
+    let data = mnist::load_mnist_zero_one();
+
+    // Test on the first two images
+    assert_eq!(classify_zero_one(&data.images[0]), data.targets[0]);
+    assert_eq!(classify_zero_one(&data.images[1]), data.targets[1]);
+
+    // Test on the first 100 items, make sure accuracy >90%
+    let n = 100;
+    let correct: usize = (0..n)
+        .filter(|&i| classify_zero_one(&data.images[i]) == data.targets[i])
+        .count();
+    let accuracy = correct as f64 / n as f64;
+    assert!(
+        accuracy > 0.9,
+        "Accuracy {accuracy:.2} is not > 0.9 on the first {n} filtered MNIST samples"
+    );
+}
 
 fn reference_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
     a.dot(b)
@@ -140,4 +231,71 @@ fn test_block_matmul_not_divisible_by_4() {
     let a = Array2::from_shape_vec((16, 12), vec![0.0f32; 192]).unwrap();
     let b = Array2::from_shape_vec((12, 7), vec![0.0f32; 84]).unwrap();
     block_matmul(&a, &b);
+}
+
+#[test]
+#[should_panic]
+fn test_matrix_vector_product_2_dimension_mismatch() {
+    let a = Array2::from_shape_vec((5, 4), (0..20).map(|x| x as f32).collect()).unwrap();
+    let b = Array1::from(vec![1.0f32; 6]);
+    matrix_vector_product_2(&a, &b);
+}
+
+#[test]
+#[should_panic]
+fn test_matmul_2_dimension_mismatch() {
+    let a = Array2::from_shape_vec((4, 5), (0..20).map(|x| x as f32).collect()).unwrap();
+    let b = Array2::from_shape_vec((4, 5), (0..20).map(|x| x as f32).collect()).unwrap();
+    matmul_2(&a, &b);
+}
+
+#[test]
+#[should_panic]
+fn test_matmul_3_dimension_mismatch() {
+    let a = Array2::from_shape_vec((4, 5), (0..20).map(|x| x as f32).collect()).unwrap();
+    let b = Array2::from_shape_vec((4, 5), (0..20).map(|x| x as f32).collect()).unwrap();
+    matmul_3(&a, &b);
+}
+
+#[test]
+fn test_batch_matmul() {
+    let a =
+        Array4::from_shape_vec((2, 3, 4, 5), (0..120).map(|x| x as f32 / 100.0).collect()).unwrap();
+    let b =
+        Array4::from_shape_vec((2, 3, 5, 6), (0..180).map(|x| x as f32 / 100.0).collect()).unwrap();
+    let z = batch_matmul(&a, &b);
+    // Verify each batch element against reference matmul
+    for i in 0..2 {
+        for j in 0..3 {
+            let a_slice = a.slice(ndarray::s![i, j, .., ..]).to_owned();
+            let b_slice = b.slice(ndarray::s![i, j, .., ..]).to_owned();
+            let expected = reference_matmul(&a_slice, &b_slice);
+            let z_slice = z.slice(ndarray::s![i, j, .., ..]).to_owned();
+            assert!(z_slice.abs_diff_eq(&expected, 1e-3));
+        }
+    }
+}
+
+#[test]
+#[should_panic]
+fn test_batch_matmul_inner_dim_mismatch() {
+    let a = Array4::from_shape_vec((2, 3, 4, 5), vec![0.0f32; 120]).unwrap();
+    let b = Array4::from_shape_vec((2, 3, 4, 5), vec![0.0f32; 120]).unwrap();
+    batch_matmul(&a, &b);
+}
+
+#[test]
+#[should_panic]
+fn test_batch_matmul_batch_dim_mismatch() {
+    let a = Array4::from_shape_vec((2, 3, 4, 5), vec![0.0f32; 120]).unwrap();
+    let b = Array4::from_shape_vec((4, 3, 5, 6), vec![0.0f32; 360]).unwrap();
+    batch_matmul(&a, &b);
+}
+
+#[test]
+#[should_panic]
+fn test_batch_matmul_batch_dim2_mismatch() {
+    let a = Array4::from_shape_vec((2, 3, 4, 5), vec![0.0f32; 120]).unwrap();
+    let b = Array4::from_shape_vec((2, 4, 5, 6), vec![0.0f32; 240]).unwrap();
+    batch_matmul(&a, &b);
 }

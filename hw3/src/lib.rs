@@ -81,7 +81,12 @@ pub struct Linear {
 }
 
 impl Linear {
-    pub fn new(in_features: usize, out_features: usize, varmap: &VarMap, name: &str) -> Result<Self> {
+    pub fn new(
+        in_features: usize,
+        out_features: usize,
+        varmap: &VarMap,
+        name: &str,
+    ) -> Result<Self> {
         todo!()
     }
 

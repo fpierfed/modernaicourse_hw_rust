@@ -84,10 +84,7 @@ fn test_compute_gradients() {
 
 #[test]
 fn test_cross_entropy_loss() {
-    let y_pred = vec![
-        vec![2.0, 1.0, 0.0],
-        vec![0.0, 2.0, 1.0],
-    ];
+    let y_pred = vec![vec![2.0, 1.0, 0.0], vec![0.0, 2.0, 1.0]];
     let y = vec![0, 2];
     let loss = cross_entropy_loss(&y_pred, &y);
     assert!((loss - 0.9076060056686401).abs() < 1e-6);
@@ -126,10 +123,16 @@ fn test_train_sgd() {
 
     // Verify predictions are correct after training
     for (xi, &yi) in x.iter().zip(y.iter()) {
-        let scores: Vec<f64> = w.iter().map(|wj| {
-            wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum()
-        }).collect();
-        let pred = scores.iter().enumerate().max_by(|a, b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        let scores: Vec<f64> = w
+            .iter()
+            .map(|wj| wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum())
+            .collect();
+        let pred = scores
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .unwrap()
+            .0;
         assert_eq!(pred, yi);
     }
 }

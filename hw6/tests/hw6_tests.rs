@@ -5,7 +5,13 @@ use std::io::Write;
 #[test]
 fn test_text_to_corpus() {
     let (corpus, counts) = text_to_corpus("a b b");
-    assert_eq!(corpus, vec![vec!["a".to_string()], vec![" ".to_string(), "b".to_string()]]);
+    assert_eq!(
+        corpus,
+        vec![
+            vec!["a".to_string()],
+            vec![" ".to_string(), "b".to_string()]
+        ]
+    );
     assert_eq!(counts, vec![1, 2]);
 }
 
@@ -16,8 +22,22 @@ fn test_text_to_corpus_newline() {
         corpus,
         vec![
             vec!["h".to_string(), "i".to_string()],
-            vec![" ".to_string(), "t".to_string(), "h".to_string(), "e".to_string(), "r".to_string(), "e".to_string()],
-            vec!["\n".to_string(), "t".to_string(), "h".to_string(), "e".to_string(), "r".to_string(), "e".to_string()],
+            vec![
+                " ".to_string(),
+                "t".to_string(),
+                "h".to_string(),
+                "e".to_string(),
+                "r".to_string(),
+                "e".to_string()
+            ],
+            vec![
+                "\n".to_string(),
+                "t".to_string(),
+                "h".to_string(),
+                "e".to_string(),
+                "r".to_string(),
+                "e".to_string()
+            ],
         ]
     );
     assert_eq!(counts, vec![1, 1, 1]);
@@ -31,7 +51,10 @@ fn test_most_common_pair() {
         vec!["b".to_string(), "c".to_string()],
     ];
     let counts = vec![2, 1, 3];
-    assert_eq!(most_common_pair(&corpus, &counts), ("a".to_string(), "b".to_string()));
+    assert_eq!(
+        most_common_pair(&corpus, &counts),
+        ("a".to_string(), "b".to_string())
+    );
 }
 
 #[test]
@@ -42,7 +65,10 @@ fn test_most_common_pair_space_prefix() {
         vec!["x".to_string(), "y".to_string()],
     ];
     let counts = vec![4, 1, 1];
-    assert_eq!(most_common_pair(&corpus, &counts), (" ".to_string(), "x".to_string()));
+    assert_eq!(
+        most_common_pair(&corpus, &counts),
+        (" ".to_string(), "x".to_string())
+    );
 }
 
 #[test]
@@ -86,7 +112,13 @@ fn test_train_bpe() {
     assert_eq!(tokens[" "], ' ' as u32);
     assert_eq!(tokens["aa"], 256);
     assert_eq!(tokens[" aa"], 257);
-    assert_eq!(merges, vec![("a".to_string(), "a".to_string()), (" ".to_string(), "aa".to_string())]);
+    assert_eq!(
+        merges,
+        vec![
+            ("a".to_string(), "a".to_string()),
+            (" ".to_string(), "aa".to_string())
+        ]
+    );
 }
 
 #[test]
@@ -96,7 +128,10 @@ fn test_bpe_encode() {
     tokens.insert(" ".to_string(), 1);
     tokens.insert("aa".to_string(), 2);
     tokens.insert(" aa".to_string(), 3);
-    let merges = vec![("a".to_string(), "a".to_string()), (" ".to_string(), "aa".to_string())];
+    let merges = vec![
+        ("a".to_string(), "a".to_string()),
+        (" ".to_string(), "aa".to_string()),
+    ];
 
     assert_eq!(bpe_encode("aa aa", &merges, &tokens), vec![2, 3]);
     assert_eq!(bpe_encode("aa", &merges, &tokens), vec![2]);
@@ -146,9 +181,7 @@ fn test_dataloader() {
     let path = dir.path().join("tokens.bin");
 
     // Write tokens 0..20 as u16
-    let data: Vec<u8> = (0u16..20)
-        .flat_map(|t| t.to_le_bytes())
-        .collect();
+    let data: Vec<u8> = (0u16..20).flat_map(|t| t.to_le_bytes()).collect();
     std::fs::write(&path, &data).unwrap();
 
     let loader = DataLoader::new(&path, 3, 2);
@@ -179,10 +212,13 @@ fn test_cross_entropy_loss_multidim() {
     use candle_core::{Device, Tensor};
     // (batch=2, seq=2, vocab=3) logits
     let logits = Tensor::new(
-        &[[[1.0f32, 0.0, -1.0], [0.5, -0.5, 0.0]],
-          [[-1.0, 2.0, 0.0], [3.0, 1.0, 0.0]]],
+        &[
+            [[1.0f32, 0.0, -1.0], [0.5, -0.5, 0.0]],
+            [[-1.0, 2.0, 0.0], [3.0, 1.0, 0.0]],
+        ],
         &Device::Cpu,
-    ).unwrap();
+    )
+    .unwrap();
     let y = Tensor::new(&[[0u32, 1], [1, 0]], &Device::Cpu).unwrap();
     let loss = cross_entropy_loss(&logits, &y).unwrap();
     let val: f32 = loss.to_scalar().unwrap();

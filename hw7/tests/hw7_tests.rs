@@ -83,9 +83,7 @@ fn test_extract_answer() {
 #[test]
 fn test_format_chat_prompt() {
     let specials = special_tokens();
-    let encode_fn = |text: &str| -> Vec<u32> {
-        text.chars().map(|c| c as u32).collect()
-    };
+    let encode_fn = |text: &str| -> Vec<u32> { text.chars().map(|c| c as u32).collect() };
 
     let tokens = format_chat_prompt("What is 2+2?", &encode_fn, &specials);
 
@@ -102,9 +100,7 @@ fn test_format_chat_prompt() {
 #[test]
 fn test_create_sft_example() {
     let specials = special_tokens();
-    let encode_fn = |text: &str| -> Vec<u32> {
-        text.chars().map(|c| c as u32).collect()
-    };
+    let encode_fn = |text: &str| -> Vec<u32> { text.chars().map(|c| c as u32).collect() };
 
     let example = create_sft_example(
         "What is 2+2?",

@@ -108,7 +108,11 @@ pub fn train_bpe(text: &str, vocab_size: usize) -> (HashMap<String, u32>, Vec<(S
 }
 
 /// Encode a string using trained BPE merges and token map.
-pub fn bpe_encode(text: &str, merges: &[(String, String)], tokens: &HashMap<String, u32>) -> Vec<u32> {
+pub fn bpe_encode(
+    text: &str,
+    merges: &[(String, String)],
+    tokens: &HashMap<String, u32>,
+) -> Vec<u32> {
     todo!()
 }
 
@@ -123,49 +127,128 @@ pub fn bpe_decode(ids: &[u32], tokens: &HashMap<String, u32>) -> String {
 
 pub struct Linear {}
 impl Linear {
-    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> { todo!() }
-    pub fn weight(&self) -> &Tensor { todo!() }
+    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+    pub fn weight(&self) -> &Tensor {
+        todo!()
+    }
 }
 
 pub struct Embedding {}
 impl Embedding {
-    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> { todo!() }
-    pub fn weight(&self) -> &Tensor { todo!() }
+    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+    pub fn weight(&self) -> &Tensor {
+        todo!()
+    }
 }
 
-pub fn silu(_x: &Tensor) -> Result<Tensor> { todo!() }
+pub fn silu(_x: &Tensor) -> Result<Tensor> {
+    todo!()
+}
 
 /// RMS normalization (no learned weight, just a function).
 /// rms_norm(x) = x / sqrt(mean(x^2) + eps)
-pub fn rms_norm(_x: &Tensor, _eps: f64) -> Result<Tensor> { todo!() }
+pub fn rms_norm(_x: &Tensor, _eps: f64) -> Result<Tensor> {
+    todo!()
+}
 
-pub fn self_attention(_q: &Tensor, _k: &Tensor, _v: &Tensor, _mask: Option<&Tensor>) -> Result<Tensor> { todo!() }
+pub fn self_attention(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _mask: Option<&Tensor>,
+) -> Result<Tensor> {
+    todo!()
+}
 
-pub struct MultiHeadAttentionKVCache { pub n_heads: usize }
+pub struct MultiHeadAttentionKVCache {
+    pub n_heads: usize,
+}
 impl MultiHeadAttentionKVCache {
-    pub fn new(_dim: usize, _n_heads: usize, _max_cache: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _x: &Tensor, _mask: Option<&Tensor>, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _dim: usize,
+        _n_heads: usize,
+        _max_cache: usize,
+        _vm: &VarMap,
+        _name: &str,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _x: &Tensor,
+        _mask: Option<&Tensor>,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 /// Simple two-layer MLP: silu(X @ W1^T) @ W2^T
 pub struct MLP {}
 impl MLP {
-    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> { todo!() }
+    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub struct TransformerBlock {}
 impl TransformerBlock {
-    pub fn new(_dim: usize, _n_heads: usize, _ffn_dim: usize, _max_seq: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _x: &Tensor, _mask: Option<&Tensor>, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _dim: usize,
+        _n_heads: usize,
+        _ffn_dim: usize,
+        _max_seq: usize,
+        _vm: &VarMap,
+        _name: &str,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _x: &Tensor,
+        _mask: Option<&Tensor>,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub struct LLM {}
 impl LLM {
-    pub fn new(_num_tokens: usize, _dim: usize, _n_heads: usize, _max_seq: usize, _ffn_dim: usize, _num_layers: usize, _vm: &VarMap) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _tokens: &Tensor, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _num_tokens: usize,
+        _dim: usize,
+        _n_heads: usize,
+        _max_seq: usize,
+        _ffn_dim: usize,
+        _num_layers: usize,
+        _vm: &VarMap,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _tokens: &Tensor,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 // ============================================================
@@ -194,11 +277,15 @@ pub fn pretokenize_data(
 /// Each sample is seq_len tokens; target is shifted by 1.
 pub struct DataLoader {}
 impl DataLoader {
-    pub fn new(_path: &Path, _seq_len: usize, _batch_size: usize) -> Self { todo!() }
+    pub fn new(_path: &Path, _seq_len: usize, _batch_size: usize) -> Self {
+        todo!()
+    }
 }
 impl Iterator for DataLoader {
     type Item = (Tensor, Tensor);
-    fn next(&mut self) -> Option<Self::Item> { todo!() }
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
 }
 
 /// Adam optimizer.
@@ -207,9 +294,15 @@ pub struct Adam {
     pub v: Vec<Tensor>,
 }
 impl Adam {
-    pub fn new(_params: Vec<Tensor>, _lr: f64, _betas: (f64, f64), _eps: f64) -> Self { todo!() }
-    pub fn step(&mut self) -> Result<()> { todo!() }
-    pub fn zero_grad(&mut self) -> Result<()> { todo!() }
+    pub fn new(_params: Vec<Tensor>, _lr: f64, _betas: (f64, f64), _eps: f64) -> Self {
+        todo!()
+    }
+    pub fn step(&mut self) -> Result<()> {
+        todo!()
+    }
+    pub fn zero_grad(&mut self) -> Result<()> {
+        todo!()
+    }
 }
 
 /// Train the LLM for one pass over the data loader.

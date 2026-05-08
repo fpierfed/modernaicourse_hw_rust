@@ -64,50 +64,131 @@ use candle_nn::VarMap;
 
 pub struct Linear {}
 impl Linear {
-    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> { todo!() }
-    pub fn weight(&self) -> &Tensor { todo!() }
+    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+    pub fn weight(&self) -> &Tensor {
+        todo!()
+    }
 }
 
 pub struct Embedding {}
 impl Embedding {
-    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> { todo!() }
-    pub fn weight(&self) -> &Tensor { todo!() }
+    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
+    pub fn weight(&self) -> &Tensor {
+        todo!()
+    }
 }
 
-pub fn silu(_x: &Tensor) -> Result<Tensor> { todo!() }
+pub fn silu(_x: &Tensor) -> Result<Tensor> {
+    todo!()
+}
 
 pub struct RMSNorm {}
 impl RMSNorm {
-    pub fn new(_dim: usize, _eps: f64, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> { todo!() }
+    pub fn new(_dim: usize, _eps: f64, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
-pub fn self_attention(_q: &Tensor, _k: &Tensor, _v: &Tensor, _mask: Option<&Tensor>) -> Result<Tensor> { todo!() }
+pub fn self_attention(
+    _q: &Tensor,
+    _k: &Tensor,
+    _v: &Tensor,
+    _mask: Option<&Tensor>,
+) -> Result<Tensor> {
+    todo!()
+}
 
-pub struct MultiHeadAttentionKVCache { pub n_heads: usize }
+pub struct MultiHeadAttentionKVCache {
+    pub n_heads: usize,
+}
 impl MultiHeadAttentionKVCache {
-    pub fn new(_dim: usize, _n_heads: usize, _max_cache: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _x: &Tensor, _mask: Option<&Tensor>, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _dim: usize,
+        _n_heads: usize,
+        _max_cache: usize,
+        _vm: &VarMap,
+        _name: &str,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _x: &Tensor,
+        _mask: Option<&Tensor>,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub struct GatedMLP {}
 impl GatedMLP {
-    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> { todo!() }
+    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub struct TransformerBlock {}
 impl TransformerBlock {
-    pub fn new(_dim: usize, _n_heads: usize, _ffn_dim: usize, _max_seq: usize, _vm: &VarMap, _name: &str) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _x: &Tensor, _mask: Option<&Tensor>, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _dim: usize,
+        _n_heads: usize,
+        _ffn_dim: usize,
+        _max_seq: usize,
+        _vm: &VarMap,
+        _name: &str,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _x: &Tensor,
+        _mask: Option<&Tensor>,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub struct Llama3Simplified {}
 impl Llama3Simplified {
-    pub fn new(_num_tokens: usize, _dim: usize, _n_heads: usize, _max_seq: usize, _ffn_dim: usize, _num_layers: usize, _vm: &VarMap) -> Result<Self> { todo!() }
-    pub fn forward(&mut self, _tokens: &Tensor, _seq_pos: usize, _use_cache: bool) -> Result<Tensor> { todo!() }
+    pub fn new(
+        _num_tokens: usize,
+        _dim: usize,
+        _n_heads: usize,
+        _max_seq: usize,
+        _ffn_dim: usize,
+        _num_layers: usize,
+        _vm: &VarMap,
+    ) -> Result<Self> {
+        todo!()
+    }
+    pub fn forward(
+        &mut self,
+        _tokens: &Tensor,
+        _seq_pos: usize,
+        _use_cache: bool,
+    ) -> Result<Tensor> {
+        todo!()
+    }
 }
 
 pub fn generate(

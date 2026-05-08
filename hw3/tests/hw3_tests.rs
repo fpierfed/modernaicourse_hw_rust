@@ -26,10 +26,7 @@ fn test_linear_batch_dims() {
 
 #[test]
 fn test_cross_entropy_loss() {
-    let logits = Tensor::new(
-        &[[2.0f32, 1.0, 0.0], [0.0, 2.0, 1.0]],
-        &DEVICE,
-    ).unwrap();
+    let logits = Tensor::new(&[[2.0f32, 1.0, 0.0], [0.0, 2.0, 1.0]], &DEVICE).unwrap();
     let y = Tensor::new(&[0u32, 2], &DEVICE).unwrap();
     let loss = cross_entropy_loss(&logits, &y).unwrap();
     let loss_val: f32 = loss.to_scalar().unwrap();
@@ -38,10 +35,7 @@ fn test_cross_entropy_loss() {
 
 #[test]
 fn test_cross_entropy_numerically_stable() {
-    let logits = Tensor::new(
-        &[[1000.0f32, 1001.0, 999.5], [1.0, -2.0, 0.5]],
-        &DEVICE,
-    ).unwrap();
+    let logits = Tensor::new(&[[1000.0f32, 1001.0, 999.5], [1.0, -2.0, 0.5]], &DEVICE).unwrap();
     let y = Tensor::new(&[1u32, 2], &DEVICE).unwrap();
     let loss = cross_entropy_loss(&logits, &y).unwrap();
     let loss_val: f32 = loss.to_scalar().unwrap();
@@ -50,7 +44,10 @@ fn test_cross_entropy_numerically_stable() {
 
 #[test]
 fn test_dataloader_batches() {
-    let x = Tensor::arange(0.0f32, 24.0, &DEVICE).unwrap().reshape(&[12, 2]).unwrap();
+    let x = Tensor::arange(0.0f32, 24.0, &DEVICE)
+        .unwrap()
+        .reshape(&[12, 2])
+        .unwrap();
     let y = Tensor::arange(0u32, 12, &DEVICE).unwrap();
 
     let loader = DataLoader::new(x, y, 5);

@@ -114,22 +114,36 @@ fn test_kv_cache_consistency() {
     assert_eq!(full.dims(), &[1, 5, 12]);
 
     // Prefix + tail with cache should match
-    let prefix = attn.forward(
-        &x.narrow(1, 0, 3).unwrap(),
-        Some(&mask.narrow(0, 0, 3).unwrap().narrow(1, 0, 3).unwrap()),
-        0, true,
-    ).unwrap();
-    let tail = attn.forward(
-        &x.narrow(1, 3, 2).unwrap(),
-        Some(&mask.narrow(0, 3, 2).unwrap()),
-        3, true,
-    ).unwrap();
+    let prefix = attn
+        .forward(
+            &x.narrow(1, 0, 3).unwrap(),
+            Some(&mask.narrow(0, 0, 3).unwrap().narrow(1, 0, 3).unwrap()),
+            0,
+            true,
+        )
+        .unwrap();
+    let tail = attn
+        .forward(
+            &x.narrow(1, 3, 2).unwrap(),
+            Some(&mask.narrow(0, 3, 2).unwrap()),
+            3,
+            true,
+        )
+        .unwrap();
 
     assert_eq!(prefix.dims(), &[1, 3, 12]);
     assert_eq!(tail.dims(), &[1, 2, 12]);
     // full[:, 3:] should be close to tail
     let full_tail = full.narrow(1, 3, 2).unwrap();
-    let diff = full_tail.sub(&tail).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+    let diff = full_tail
+        .sub(&tail)
+        .unwrap()
+        .abs()
+        .unwrap()
+        .max_all()
+        .unwrap()
+        .to_scalar::<f32>()
+        .unwrap();
     assert!(diff < 1e-5, "KV cache mismatch: max diff = {diff}");
 }
 
@@ -167,29 +181,30 @@ fn test_generate() {
     let mut call_count = 0usize;
     let next_tokens: Vec<u32> = vec![3, 4]; // A, then stop token
 
-    let mut model_fn = |tokens: &Tensor, seq_pos: usize, use_kv_cache: bool| -> candle_core::Result<Tensor> {
-        let vocab_size = 6;
-        let seq_len = tokens.dims()[1];
-        let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
-        let next = next_tokens[call_count] as usize;
-        data[(seq_len - 1) * vocab_size + next] = 0.0;
-        call_count += 1;
-        Tensor::from_slice(&data, &[1, seq_len, vocab_size], &Device::Cpu)
-    };
+    let mut model_fn =
+        |tokens: &Tensor, seq_pos: usize, use_kv_cache: bool| -> candle_core::Result<Tensor> {
+            let vocab_size = 6;
+            let seq_len = tokens.dims()[1];
+            let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
+            let next = next_tokens[call_count] as usize;
+            data[(seq_len - 1) * vocab_size + next] = 0.0;
+            call_count += 1;
+            Tensor::from_slice(&data, &[1, seq_len, vocab_size], &Device::Cpu)
+        };
 
     let decode_fn = |tokens: &[u32]| -> String {
-        tokens.iter().map(|&t| match t { 3 => 'A', 4 => '!', 5 => 'B', _ => '?' }).collect()
+        tokens
+            .iter()
+            .map(|&t| match t {
+                3 => 'A',
+                4 => '!',
+                5 => 'B',
+                _ => '?',
+            })
+            .collect()
     };
 
-    let generated = generate(
-        &mut model_fn,
-        &[1, 2],
-        &decode_fn,
-        &[4],
-        0.7,
-        5,
-        false,
-    ).unwrap();
+    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, &[4], 0.7, 5, false).unwrap();
 
     assert_eq!(generated, vec![3, 4]);
 }

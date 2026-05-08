@@ -26,7 +26,10 @@ fn test_poly_add() {
     let p3 = Polynomial::new(vec![-1.0, 6.0, 7.0, -5.0]);
     let p4 = Polynomial::new(vec![0.3, 0.4, 1.6, 1.9]);
 
-    assert_eq!(poly_add(&p1, &p2), Polynomial::new(vec![1.0, 7.0, 0.0, 5.0]));
+    assert_eq!(
+        poly_add(&p1, &p2),
+        Polynomial::new(vec![1.0, 7.0, 0.0, 5.0])
+    );
     assert_eq!(poly_add(&p1, &p3), Polynomial::new(vec![0.0, 11.0, 7.0]));
     assert_eq!(poly_add(&p1, &Polynomial::new(vec![0.0])), p1);
 
@@ -43,7 +46,10 @@ fn test_poly_mul() {
     let p2 = Polynomial::new(vec![0.0, 2.0]);
     let p3 = Polynomial::new(vec![-1.0, 6.0, 7.0, -5.0]);
 
-    assert_eq!(poly_mul(&p1, &p2), Polynomial::new(vec![0.0, 2.0, 10.0, 0.0, 10.0]));
+    assert_eq!(
+        poly_mul(&p1, &p2),
+        Polynomial::new(vec![0.0, 2.0, 10.0, 0.0, 10.0])
+    );
     assert_eq!(
         poly_mul(&p1, &p3),
         Polynomial::new(vec![-1.0, 1.0, 37.0, 25.0, 5.0, 35.0, -25.0])
@@ -66,5 +72,8 @@ fn test_poly_derivative() {
 
     assert_eq!(poly_derivative(&p1), Polynomial::new(vec![5.0, 0.0, 15.0]));
     assert_eq!(poly_derivative(&p2), Polynomial::new(vec![0.4, 3.2]));
-    assert_eq!(poly_derivative(&Polynomial::new(vec![0.0])), Polynomial::new(vec![0.0]));
+    assert_eq!(
+        poly_derivative(&Polynomial::new(vec![0.0])),
+        Polynomial::new(vec![0.0])
+    );
 }

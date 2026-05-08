@@ -78,11 +78,15 @@ pub fn get_loss_mask(
 /// Chat data loader yielding (x, y, mask) triples.
 pub struct DataLoaderChat {}
 impl DataLoaderChat {
-    pub fn new(_filename: &Path, _seq_len: usize, _batch_size: usize) -> Self { todo!() }
+    pub fn new(_filename: &Path, _seq_len: usize, _batch_size: usize) -> Self {
+        todo!()
+    }
 }
 impl Iterator for DataLoaderChat {
     type Item = (Tensor, Tensor, Tensor);
-    fn next(&mut self) -> Option<Self::Item> { todo!() }
+    fn next(&mut self) -> Option<Self::Item> {
+        todo!()
+    }
 }
 
 /// Run one pass of supervised chat finetuning with a masked next-token loss.
@@ -101,11 +105,7 @@ pub fn train_chat_sft(
 
 /// Compute masked sequence log probabilities for each batch element.
 /// Returns tensor of shape (batch_size,) with summed masked log-probs.
-pub fn log_probs(
-    _logits: &Tensor,
-    _y: &Tensor,
-    _mask: &Tensor,
-) -> Result<Tensor> {
+pub fn log_probs(_logits: &Tensor, _y: &Tensor, _mask: &Tensor) -> Result<Tensor> {
     todo!()
 }
 
@@ -121,8 +121,12 @@ pub fn softplus(_x: &Tensor, _beta: f64) -> Result<Tensor> {
 pub fn dpo_loss(
     _model: &dyn Fn(&Tensor) -> Result<Tensor>,
     _model_ref: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _xp: &Tensor, _yp: &Tensor, _maskp: &Tensor,
-    _xn: &Tensor, _yn: &Tensor, _maskn: &Tensor,
+    _xp: &Tensor,
+    _yp: &Tensor,
+    _maskp: &Tensor,
+    _xn: &Tensor,
+    _yn: &Tensor,
+    _maskn: &Tensor,
     _beta: f64,
 ) -> Result<Tensor> {
     todo!()

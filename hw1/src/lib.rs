@@ -11,7 +11,7 @@
  * loops and element-by-element assignment/operations to implement your functions.
  */
 
-use ndarray::{Array1, Array2};
+use ndarray::{Array1, Array2, Array4};
 
 /*
  * Problem 1: "Classical" programming for digit classification
@@ -23,9 +23,19 @@ use ndarray::{Array1, Array2};
  * of digits in the MNIST dataset. Specifically, implement the function
  * `classify_zero_one` to classify between images of zeros and ones.
  * Try to think intuitively about features that might distinguish between zeros and ones.
- *
- * NOTE: This problem is omitted from the Rust port as it requires MNIST image data.
  */
+
+/// Classify a 28x28 grayscale image (pixel values in [0.0, 1.0]) as either
+/// a zero (return 0) or a one (return 1).
+///
+/// Input:
+///     image: 2D array (28 x 28) with f32 values normalized to [0, 1]
+///
+/// Output:
+///     u8 - predicted digit (0 or 1)
+pub fn classify_zero_one(image: &Array2<f32>) -> u8 {
+    todo!()
+}
 
 /*
  * Problem 2: Vector Addition
@@ -275,5 +285,33 @@ pub fn matmul_3(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
 /// Output:
 ///     2D array - matrix AB
 pub fn block_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
+    todo!()
+}
+
+/*
+ * Problem 10: Batch matrix multiplication
+ *
+ * Implement a batched form of matrix multiplication. For input tensors of shape
+ * (b1, b2, ..., bn, m, k) and (b1, b2, ..., bn, k, p), compute the matrix product
+ * along the last two dimensions for each batch element. The batch dimensions must
+ * match exactly and both inputs must have the same number of dimensions.
+ *
+ * Use one of the matmul_1, matmul_2, or matmul_3 functions for the inner
+ * matrix multiplication.
+ */
+
+/// Compute batched matrix multiplication on 4D arrays.
+/// For A of shape (b1, b2, m, k) and B of shape (b1, b2, k, p), compute
+/// the matrix product along the last two dimensions for each batch element.
+/// Panics if batch dimensions don't match, inner dimensions don't match,
+/// or the arrays don't have the same number of dimensions.
+///
+/// Input:
+///     A: 4D array (b1, b2, m, k)
+///     B: 4D array (b1, b2, k, p)
+///
+/// Output:
+///     4D array (b1, b2, m, p)
+pub fn batch_matmul(a: &Array4<f32>, b: &Array4<f32>) -> Array4<f32> {
     todo!()
 }

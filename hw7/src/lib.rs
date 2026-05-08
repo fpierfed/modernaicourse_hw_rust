@@ -119,10 +119,7 @@ pub fn pretokenize_gsm8k(
 /// Build a boolean mask for GSM8K format:
 /// True after <THINK> (reasoning), False after </TOOL> (tool response),
 /// True after </RESPONSE>, False after </ANSWER>.
-pub fn get_loss_mask(
-    _tokens: &[u32],
-    _special_tokens: &HashMap<String, u32>,
-) -> Vec<bool> {
+pub fn get_loss_mask(_tokens: &[u32], _special_tokens: &HashMap<String, u32>) -> Vec<bool> {
     todo!()
 }
 
@@ -206,8 +203,8 @@ pub fn evaluate(
 /// where R_bar = mean(rewards).
 pub fn rl_loss(
     _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _tokens: &Tensor,        // (num_completions, seq_len)
-    _rewards: &[f64],        // (num_completions,)
+    _tokens: &Tensor, // (num_completions, seq_len)
+    _rewards: &[f64], // (num_completions,)
     _mask_fn: &dyn Fn(&[u32]) -> Vec<bool>,
 ) -> Result<Tensor> {
     todo!()
