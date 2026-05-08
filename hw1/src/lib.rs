@@ -11,7 +11,7 @@
  * loops and element-by-element assignment/operations to implement your functions.
  */
 
-use ndarray::{Array1, Array2, Array4};
+use ndarray::{Array1, Array2, ArrayD};
 
 /*
  * Problem 1: "Classical" programming for digit classification
@@ -300,18 +300,18 @@ pub fn block_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
  * matrix multiplication.
  */
 
-/// Compute batched matrix multiplication on 4D arrays.
-/// For A of shape (b1, b2, m, k) and B of shape (b1, b2, k, p), compute
-/// the matrix product along the last two dimensions for each batch element.
+/// Compute batched matrix multiplication on N-dimensional arrays.
+/// For A of shape (..., m, k) and B of shape (..., k, p), compute the matrix
+/// product along the last two dimensions for each batch element.
 /// Panics if batch dimensions don't match, inner dimensions don't match,
 /// or the arrays don't have the same number of dimensions.
 ///
 /// Input:
-///     A: 4D array (b1, b2, m, k)
-///     B: 4D array (b1, b2, k, p)
+///     A: N-dimensional array (..., m, k)
+///     B: N-dimensional array (..., k, p)
 ///
 /// Output:
-///     4D array (b1, b2, m, p)
-pub fn batch_matmul(a: &Array4<f32>, b: &Array4<f32>) -> Array4<f32> {
+///     N-dimensional array (..., m, p)
+pub fn batch_matmul(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
     todo!()
 }
