@@ -1,6 +1,24 @@
 use hw2::*;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const EPS: f64 = 1e-6;
+
+fn apply_fn(func: Box<dyn Function>, args: &[&Rc<RefCell<Variable>>]) -> Rc<RefCell<Variable>> {
+    let inputs: Vec<f64> = args.iter().map(|a| a.borrow().value).collect();
+    let value = func.forward(&inputs);
+    for a in args {
+        a.borrow_mut().num_children += 1;
+    }
+    let parents: Vec<Rc<RefCell<Variable>>> = args.iter().map(|a| Rc::clone(a)).collect();
+    Rc::new(RefCell::new(Variable {
+        value,
+        grad: None,
+        function: Some(func),
+        parents,
+        num_children: 0,
+    }))
+}
 
 // --- Function forward/backward tests ---
 
@@ -71,13 +89,47 @@ fn test_exp_forward_backward() {
 #[test]
 fn test_compute_gradients() {
     // z = ((-(x * y) * x * x) * (-y)), x=3, y=4
-    // z = 432, dz/dx = 432, dz/dy = 216
-    // This requires the full autodiff graph to be wired up.
-    // Left as integration test once Variable graph operations are implemented.
-    // TODO: uncomment once Variable operator overloading is done.
-    // let x = Variable::new(3.0);
-    // let y = Variable::new(4.0);
-    // ... build expression, call compute_gradients, check grads
+    // z = (-(3*4) * 3 * 3) * (-4) = (-108) * (-4) = 432
+    // dz/dx = 432, dz/dy = 216
+    let x = Variable::new(3.0);
+    let y = Variable::new(4.0);
+
+    // Build: x * y
+    let xy = apply_fn(Box::new(Multiply), &[&x, &y]);
+    // -(x * y)
+    let neg_xy = apply_fn(Box::new(Negate), &[&xy]);
+    // -(x*y) * x
+    let neg_xy_x = apply_fn(Box::new(Multiply), &[&neg_xy, &x]);
+    // -(x*y) * x * x
+    let neg_xy_xx = apply_fn(Box::new(Multiply), &[&neg_xy_x, &x]);
+    // -y
+    let neg_y = apply_fn(Box::new(Negate), &[&y]);
+    // (-(x*y)*x*x) * (-y)
+    let z = apply_fn(Box::new(Multiply), &[&neg_xy_xx, &neg_y]);
+
+    assert!((z.borrow().value - 432.0).abs() < EPS);
+
+    compute_gradients(&z);
+
+    assert!((z.borrow().grad.unwrap() - 1.0).abs() < EPS);
+    assert!(
+        (x.borrow().grad.unwrap() - 432.0).abs() < EPS,
+        "x.grad = {:?}, expected 432.0",
+        x.borrow().grad
+    );
+    assert!(
+        (y.borrow().grad.unwrap() - 216.0).abs() < EPS,
+        "y.grad = {:?}, expected 216.0",
+        y.borrow().grad
+    );
+}
+
+#[test]
+fn test_compute_gradients_leaf() {
+    // Calling compute_gradients on a leaf variable should set its grad to 1.0
+    let w = Variable::new(-2.0);
+    compute_gradients(&w);
+    assert!((w.borrow().grad.unwrap() - 1.0).abs() < EPS);
 }
 
 // --- Cross-entropy loss ---
@@ -106,6 +158,32 @@ fn test_error() {
 }
 
 // --- SGD training ---
+
+#[test]
+fn test_train_sgd_one_epoch() {
+    let x = vec![
+        vec![2.0, 1.0],
+        vec![1.0, 2.0],
+        vec![-2.0, -1.0],
+        vec![-1.0, -2.0],
+    ];
+    let y = vec![1, 1, 0, 0];
+
+    let w = train_sgd(&x, &y, 2, 1, 0.1, 2);
+    let expected = vec![vec![-0.13340412, -0.13340412], vec![0.13340412, 0.13340412]];
+    assert_eq!(w.len(), 2);
+    assert_eq!(w[0].len(), 2);
+    for i in 0..2 {
+        for j in 0..2 {
+            assert!(
+                (w[i][j] - expected[i][j]).abs() < 1e-5,
+                "w[{i}][{j}] = {}, expected {}",
+                w[i][j],
+                expected[i][j]
+            );
+        }
+    }
+}
 
 #[test]
 fn test_train_sgd() {
