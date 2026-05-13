@@ -144,3 +144,19 @@ pub fn train_dpo(
 ) -> Result<()> {
     todo!()
 }
+
+/// Load a chat-finetuned LLM. Returns a model that can do forward passes.
+///
+/// The returned model should be trained via supervised finetuning on chat data
+/// and achieve lower loss than the base model on heldout chat conversations.
+pub fn eval_llm_chat() -> Result<Box<dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>>> {
+    todo!()
+}
+
+/// Load a DPO-finetuned LLM. Returns a model that can do forward passes.
+///
+/// The returned model should be trained via DPO on preference data and achieve
+/// < 0.55 heldout DPO loss against the chat-finetuned reference model.
+pub fn eval_llm_dpo() -> Result<Box<dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>>> {
+    todo!()
+}

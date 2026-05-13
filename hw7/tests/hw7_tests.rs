@@ -279,3 +279,56 @@ fn test_train_llm_sft_api() {
     let result = train_llm_sft(&model_fn, &loader, &mut optimizer_fn, Some(0));
     assert!(result.is_ok());
 }
+
+// ============================================================
+// End-to-end: eval_reasoning_model
+// ============================================================
+
+#[test]
+fn test_eval_reasoning_model() {
+    let mut model_fn = eval_reasoning_model().unwrap();
+
+    // Basic forward pass
+    let tokens = Tensor::new(&[[0u32, 1, 2, 3]], &DEVICE).unwrap();
+    let full = model_fn(&tokens, 0, false).unwrap();
+
+    assert_eq!(full.dims()[0], 1);
+    assert_eq!(full.dims()[1], 4);
+    let vocab_size = full.dims()[2];
+    assert!(vocab_size > 0);
+
+    // Outputs should be finite
+    let first_logits: Vec<f32> = full
+        .narrow(2, 0, 16.min(vocab_size))
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    for v in &first_logits {
+        assert!(v.is_finite(), "eval_reasoning_model has non-finite logits");
+    }
+
+    // KV cache consistency
+    let mut model_fn2 = eval_reasoning_model().unwrap();
+    let _prefix = model_fn2(&tokens.narrow(1, 0, 3).unwrap(), 0, true).unwrap();
+    let tail = model_fn2(&tokens.narrow(1, 3, 1).unwrap(), 3, true).unwrap();
+
+    let full_last: Vec<f32> = full
+        .narrow(1, 3, 1)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    let tail_vec: Vec<f32> = tail.flatten_all().unwrap().to_vec1().unwrap();
+    let max_diff: f32 = full_last
+        .iter()
+        .zip(tail_vec.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff < 3e-4,
+        "eval_reasoning_model KV cache mismatch: max_diff={max_diff}"
+    );
+}

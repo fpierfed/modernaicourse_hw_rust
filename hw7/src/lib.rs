@@ -229,3 +229,12 @@ pub fn train_llm_rl(
 ) -> Result<()> {
     todo!()
 }
+
+/// Load a trained reasoning model for GSM8K evaluation.
+///
+/// Returns a model capable of forward passes and KV-cached generation.
+/// The model should be able to solve basic GSM8K math problems using
+/// chain-of-thought reasoning with tool calls.
+pub fn eval_reasoning_model() -> Result<Box<dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>>> {
+    todo!()
+}

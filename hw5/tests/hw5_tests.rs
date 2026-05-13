@@ -3,7 +3,6 @@ use candle_nn::VarMap;
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
-use std::path::Path;
 
 const DEVICE: Device = Device::Cpu;
 
@@ -590,4 +589,99 @@ fn test_generate_max_tokens() {
     let decode_fn = |_: &[u32]| -> String { String::new() };
     let generated = generate(&mut model_fn, &[1, 2], &decode_fn, 4, 0.7, 3, false).unwrap();
     assert_eq!(generated.len(), 3);
+}
+
+// ============================================================
+// End-to-end: eval_llm
+// ============================================================
+
+mod tiny_stories_eval {
+    use hf_hub::api::sync::Api;
+    use tokenizers::Tokenizer;
+
+    pub fn load_gpt2_tokenizer() -> Tokenizer {
+        let api = Api::new().unwrap();
+        let repo = api.model("openai-community/gpt2".to_string());
+        let tokenizer_path = repo.get("tokenizer.json").unwrap();
+        Tokenizer::from_file(tokenizer_path).unwrap()
+    }
+
+    pub fn load_tiny_stories_text() -> String {
+        let api = Api::new().unwrap();
+        let repo = api.dataset("roneneldan/TinyStories".to_string());
+        let path = repo.get("TinyStoriesV2-GPT4-train.txt").unwrap();
+        let content = std::fs::read_to_string(&path).unwrap();
+        content[..4096.min(content.len())].to_string()
+    }
+
+    pub fn get_eval_tokens(start_token: usize, num_tokens: usize) -> Vec<u32> {
+        let tokenizer = load_gpt2_tokenizer();
+        let text = load_tiny_stories_text();
+        let encoding = tokenizer.encode(text.as_str(), false).unwrap();
+        let ids: Vec<u32> = encoding.get_ids().to_vec();
+        ids[start_token..start_token + num_tokens].to_vec()
+    }
+}
+
+#[test]
+fn test_eval_llm() {
+    let mut model = eval_llm().unwrap();
+
+    let eval_tokens = tiny_stories_eval::get_eval_tokens(0, 48);
+    let tokens = Tensor::from_vec(eval_tokens.clone(), &[1, 48], &DEVICE).unwrap();
+
+    // Compute sequence loss: cross-entropy of model predicting next tokens
+    let logits = model.forward(&tokens.narrow(1, 0, 47).unwrap(), 0, false).unwrap();
+    let logits_flat = logits.reshape(&[47, logits.dims()[2]]).unwrap();
+    let targets: Vec<u32> = eval_tokens[1..].to_vec();
+    let targets_t = Tensor::from_vec(targets, &[47], &DEVICE).unwrap();
+    let phrase_loss: f32 = cross_entropy_loss(&logits_flat, &targets_t)
+        .unwrap()
+        .to_scalar()
+        .unwrap();
+
+    // Corrupted: reverse the token order (except first)
+    let mut corrupted_tokens = eval_tokens.clone();
+    corrupted_tokens[1..].reverse();
+    let corrupted = Tensor::from_vec(corrupted_tokens.clone(), &[1, 48], &DEVICE).unwrap();
+    let c_logits = model.forward(&corrupted.narrow(1, 0, 47).unwrap(), 0, false).unwrap();
+    let c_logits_flat = c_logits.reshape(&[47, c_logits.dims()[2]]).unwrap();
+    let c_targets: Vec<u32> = corrupted_tokens[1..].to_vec();
+    let c_targets_t = Tensor::from_vec(c_targets, &[47], &DEVICE).unwrap();
+    let corrupted_loss: f32 = cross_entropy_loss(&c_logits_flat, &c_targets_t)
+        .unwrap()
+        .to_scalar()
+        .unwrap();
+
+    assert!(
+        phrase_loss < 7.0,
+        "eval_llm phrase_loss {phrase_loss} should be < 7.0"
+    );
+    assert!(
+        phrase_loss < corrupted_loss,
+        "phrase_loss {phrase_loss} should be < corrupted_loss {corrupted_loss}"
+    );
+
+    // KV cache consistency
+    let full = model.forward(&tokens.narrow(1, 0, 47).unwrap(), 0, false).unwrap();
+    let mut model2 = eval_llm().unwrap();
+    let _prefix = model2.forward(&tokens.narrow(1, 0, 46).unwrap(), 0, true).unwrap();
+    let tail = model2.forward(&tokens.narrow(1, 46, 1).unwrap(), 46, true).unwrap();
+
+    let full_last: Vec<f32> = full.narrow(1, 46, 1).unwrap().flatten_all().unwrap().to_vec1().unwrap();
+    let tail_vec: Vec<f32> = tail.flatten_all().unwrap().to_vec1().unwrap();
+    let max_diff: f32 = full_last.iter().zip(tail_vec.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff < 3e-4,
+        "eval_llm KV cache mismatch: max_diff={max_diff}"
+    );
+
+    // Outputs should be finite
+    let first_logits: Vec<f32> = full.narrow(2, 0, 16.min(full.dims()[2])).unwrap()
+        .flatten_all().unwrap().to_vec1().unwrap();
+    for v in &first_logits {
+        assert!(v.is_finite(), "eval_llm has non-finite logits");
+    }
 }

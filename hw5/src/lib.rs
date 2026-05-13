@@ -326,3 +326,12 @@ pub fn generate(
 ) -> Result<Vec<u32>> {
     todo!()
 }
+
+/// Load (or train) an LLM on TinyStories and return the trained model.
+///
+/// The returned model should achieve < 7.0 cross-entropy loss on the first
+/// 48 tokens of TinyStories (tokenized with GPT-2), and support KV-cached
+/// inference.
+pub fn eval_llm() -> Result<LLM> {
+    todo!()
+}

@@ -254,3 +254,106 @@ fn test_dpo_loss_shape() {
         assert!(*v >= 0.0, "DPO loss should be non-negative (softplus output)");
     }
 }
+
+// ============================================================
+// End-to-end: eval_llm_chat and eval_llm_dpo
+// ============================================================
+
+#[test]
+fn test_eval_llm_chat() {
+    let mut model_fn = eval_llm_chat().unwrap();
+
+    // Basic forward pass with some token IDs
+    let tokens = Tensor::new(&[[0u32, 1, 2, 3]], &Device::Cpu).unwrap();
+    let full = model_fn(&tokens, 0, false).unwrap();
+
+    // Should produce logits of shape (1, 4, vocab_size)
+    assert_eq!(full.dims()[0], 1);
+    assert_eq!(full.dims()[1], 4);
+    let vocab_size = full.dims()[2];
+    assert!(vocab_size > 0);
+
+    // Outputs should be finite
+    let first_logits: Vec<f32> = full
+        .narrow(2, 0, 16.min(vocab_size))
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    for v in &first_logits {
+        assert!(v.is_finite(), "eval_llm_chat has non-finite logits");
+    }
+
+    // KV cache consistency: full[:, 3:] should match cached tail
+    let mut model_fn2 = eval_llm_chat().unwrap();
+    let _prefix = model_fn2(&tokens.narrow(1, 0, 3).unwrap(), 0, true).unwrap();
+    let tail = model_fn2(&tokens.narrow(1, 3, 1).unwrap(), 3, true).unwrap();
+
+    let full_last: Vec<f32> = full
+        .narrow(1, 3, 1)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    let tail_vec: Vec<f32> = tail.flatten_all().unwrap().to_vec1().unwrap();
+    let max_diff: f32 = full_last
+        .iter()
+        .zip(tail_vec.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff < 3e-4,
+        "eval_llm_chat KV cache mismatch: max_diff={max_diff}"
+    );
+}
+
+#[test]
+fn test_eval_llm_dpo() {
+    let mut model_fn = eval_llm_dpo().unwrap();
+
+    // Basic forward pass
+    let tokens = Tensor::new(&[[0u32, 1, 2, 3]], &Device::Cpu).unwrap();
+    let full = model_fn(&tokens, 0, false).unwrap();
+
+    assert_eq!(full.dims()[0], 1);
+    assert_eq!(full.dims()[1], 4);
+    let vocab_size = full.dims()[2];
+    assert!(vocab_size > 0);
+
+    // Outputs should be finite
+    let first_logits: Vec<f32> = full
+        .narrow(2, 0, 16.min(vocab_size))
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    for v in &first_logits {
+        assert!(v.is_finite(), "eval_llm_dpo has non-finite logits");
+    }
+
+    // KV cache consistency
+    let mut model_fn2 = eval_llm_dpo().unwrap();
+    let _prefix = model_fn2(&tokens.narrow(1, 0, 3).unwrap(), 0, true).unwrap();
+    let tail = model_fn2(&tokens.narrow(1, 3, 1).unwrap(), 3, true).unwrap();
+
+    let full_last: Vec<f32> = full
+        .narrow(1, 3, 1)
+        .unwrap()
+        .flatten_all()
+        .unwrap()
+        .to_vec1()
+        .unwrap();
+    let tail_vec: Vec<f32> = tail.flatten_all().unwrap().to_vec1().unwrap();
+    let max_diff: f32 = full_last
+        .iter()
+        .zip(tail_vec.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(
+        max_diff < 3e-4,
+        "eval_llm_dpo KV cache mismatch: max_diff={max_diff}"
+    );
+}
