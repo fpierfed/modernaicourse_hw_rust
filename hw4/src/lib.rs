@@ -202,3 +202,14 @@ pub fn generate(
 ) -> Result<Vec<u32>> {
     todo!()
 }
+
+/// Load the Llama 3.2 simplified model with pretrained weights.
+///
+/// Downloads model weights from HuggingFace and returns a ready-to-use
+/// Llama3Simplified instance. The model should support both full forward
+/// passes and incremental KV-cached generation.
+///
+/// Returns the loaded model along with the vocab size (needed to verify output shape).
+pub fn eval_llama3() -> Result<Llama3Simplified> {
+    todo!()
+}
