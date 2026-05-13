@@ -214,3 +214,25 @@ pub fn epoch(
 ) -> Result<(f64, f64)> {
     todo!()
 }
+
+/// Train a linear model on MNIST and return it.
+///
+/// Given the full MNIST training data (X_train: N x 784, y_train: N),
+/// train a Linear layer to classify all 10 digits.
+/// The returned model should achieve < 10% error on the test set.
+///
+/// Use your Linear, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
+pub fn eval_linear_model(_x_train: &Tensor, _y_train: &Tensor) -> Result<Linear> {
+    todo!()
+}
+
+/// Train a two-layer neural network on MNIST and return it.
+///
+/// Given the full MNIST training data (X_train: N x 784, y_train: N),
+/// train a TwoLayerNN to classify all 10 digits.
+/// The returned model should achieve < 3% error on the first 2000 test samples.
+///
+/// Use your TwoLayerNN, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
+pub fn eval_two_layer_nn(_x_train: &Tensor, _y_train: &Tensor) -> Result<TwoLayerNN> {
+    todo!()
+}
