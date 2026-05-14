@@ -119,6 +119,9 @@ pub struct Polynomial {
 impl Polynomial {
     pub fn new(coefficients: Vec<f64>) -> Self {
         let mut c = coefficients;
+        // Just make sure that the last coefficient (i.e. the coefficient of the highest
+        // power) is not zero. This makes it easier to compute the power of the
+        // polynomial later etc.
         while c.len() > 1 && c.last() == Some(&0.0) {
             c.pop();
         }
@@ -126,6 +129,7 @@ impl Polynomial {
     }
 
     pub fn degree(&self) -> usize {
+        // This saturates at usize boundaries avoiding negative results.
         self.coefficients.len().saturating_sub(1)
     }
 }
@@ -225,6 +229,8 @@ pub fn poly_derivative(p: &Polynomial) -> Polynomial {
     let mut coefficients: Vec<f64> = (1..p.coefficients.len())
         .map(|i| p.coefficients[i] * i as f64)
         .collect();
+    // This push/append handles the case of a 0 order polynomial
+    // See new() above and if len > 1 ...
     coefficients.push(0.0);
     Polynomial::new(coefficients)
 }
