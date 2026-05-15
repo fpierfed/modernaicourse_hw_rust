@@ -12,7 +12,7 @@
  */
 
 use ndarray::prelude::*;
-use ndarray::Data;
+use ndarray::{Data, DataMut};
 
 /*
  * Problem 1: "Classical" programming for digit classification
@@ -389,6 +389,30 @@ where
  * and that their dimensions are all divisible by 4.
  */
 
+/// Helper function
+pub fn add_matmul_44<S0, S1, S2>(
+    z: &mut ArrayBase<S0, Ix2>,
+    a: &ArrayBase<S1, Ix2>,
+    b: &ArrayBase<S2, Ix2>,
+) where
+    S0: DataMut<Elem = f32>,
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(z.shape(), [4, 4], "Expecting 4x4 matrices!");
+    assert_eq!(a.shape(), [4, 4], "Expecting 4x4 matrices!");
+    assert_eq!(b.shape(), [4, 4], "Expecting 4x4 matrices!");
+
+    for i in 0..4 {
+        for j in 0..4 {
+            z[[i, j]] += a[[i, 0]] * b[[0, j]]
+                + a[[i, 1]] * b[[1, j]]
+                + a[[i, 2]] * b[[2, j]]
+                + a[[i, 3]] * b[[3, j]];
+        }
+    }
+}
+
 /// Implement a block matrix multiplication to compute the matrix-matrix product AB.
 /// Splits matrices into 4x4 blocks and multiplies block-by-block.
 /// Panics if matrices are improper shapes or have dimensions not divisible by 4.
@@ -399,8 +423,49 @@ where
 ///
 /// Output:
 ///     2D array - matrix AB
-pub fn block_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
-    todo!()
+///
+/// Note: only use the provided `add_matmul_44` finction.
+pub fn block_matmul<S1, S2>(a: &ArrayBase<S1, Ix2>, b: &ArrayBase<S2, Ix2>) -> Array2<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    let block_size = 4;
+
+    assert_eq!(
+        a.shape()[1],
+        b.shape()[0],
+        "Expecting compatible dimenstions!"
+    );
+    assert_eq!(a.shape()[0] % 4, 0, "Expecting dimensions multiple of 4!");
+    assert_eq!(a.shape()[1] % 4, 0, "Expecting dimensions multiple of 4!");
+    assert_eq!(b.shape()[0] % 4, 0, "Expecting dimensions multiple of 4!");
+    assert_eq!(b.shape()[1] % 4, 0, "Expecting dimensions multiple of 4!");
+
+    let m = a.shape()[0];
+    let n = a.shape()[1];
+    let p = b.shape()[1];
+    let mut result = Array2::zeros((m, p));
+
+    for i in 0..m / block_size {
+        for j in 0..p / block_size {
+            for k in 0..n / block_size {
+                let i0 = i * block_size;
+                let i1 = i0 + block_size;
+                let j0 = j * block_size;
+                let j1 = j0 + block_size;
+                let k0 = k * block_size;
+                let k1 = k0 + block_size;
+                add_matmul_44(
+                    &mut result.slice_mut(s![i0..i1, j0..j1]),
+                    &a.slice(s![i0..i1, k0..k1]),
+                    &b.slice(s![k0..k1, j0..j1]),
+                );
+            }
+        }
+    }
+
+    result
 }
 
 /*
@@ -427,6 +492,48 @@ pub fn block_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
 ///
 /// Output:
 ///     N-dimensional array (..., m, p)
-pub fn batch_matmul(a: &ArrayD<f32>, b: &ArrayD<f32>) -> ArrayD<f32> {
-    todo!()
+pub fn batch_matmul<S1, S2>(a: &ArrayBase<S1, IxDyn>, b: &ArrayBase<S2, IxDyn>) -> ArrayD<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    // Sanity checks on the dimensions
+    assert_eq!(
+        a.shape().len(),
+        b.shape().len(),
+        "Expecting the same number of dimenstions!"
+    );
+
+    let n: usize = a.shape().len();
+    assert!(n > 1, "Expecting matrices, not vectors!");
+
+    if a.shape().len() == 2 {
+        let a2 = a.view().into_dimensionality::<Ix2>().unwrap();
+        let b2 = b.view().into_dimensionality::<Ix2>().unwrap();
+        return matmul_3(&a2, &b2).into_dyn();
+    }
+    assert_eq!(
+        a.shape()[n.saturating_sub(1)],
+        b.shape()[n.saturating_sub(2)],
+        "Expecting compatible dimensions!"
+    );
+    for i in 0..n - 2 {
+        assert_eq!(
+            a.shape()[i],
+            b.shape()[i],
+            "Expecting compatible dimensions"
+        );
+    }
+
+    let mut result_shape = a.shape().to_vec();
+    result_shape[n.saturating_sub(1)] = b.shape()[n.saturating_sub(1)];
+    let mut result = ArrayD::zeros(IxDyn(&result_shape));
+
+    for i in 0..a.shape()[0] {
+        result.index_axis_mut(Axis(0), i).assign(&batch_matmul(
+            &a.index_axis(Axis(0), i),
+            &b.index_axis(Axis(0), i),
+        ));
+    }
+    result.into_dyn()
 }
