@@ -35,7 +35,14 @@ use ndarray::{Data, DataMut};
 /// Output:
 ///     u8 - predicted digit (0 or 1)
 pub fn classify_zero_one(image: &Array2<f32>) -> u8 {
-    todo!()
+    let center = image
+        .slice(s![13..15, 13..15])
+        .fold(f32::NEG_INFINITY, |acc, &x| acc.max(x));
+    if center >= 0.5 {
+        1
+    } else {
+        0
+    }
 }
 
 /*

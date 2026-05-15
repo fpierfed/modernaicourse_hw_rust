@@ -1018,10 +1018,10 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "flate2",
- "hf-hub",
  "ndarray",
  "rand 0.10.1",
  "rand_distr 0.6.0",
+ "reqwest",
 ]
 
 [[package]]
@@ -1968,6 +1968,7 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "encoding_rs",
+ "futures-channel",
  "futures-core",
  "futures-util",
  "h2",
