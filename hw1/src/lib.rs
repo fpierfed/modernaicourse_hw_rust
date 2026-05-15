@@ -11,7 +11,8 @@
  * loops and element-by-element assignment/operations to implement your functions.
  */
 
-use ndarray::{Array1, Array2, ArrayD};
+use ndarray::prelude::*;
+use ndarray::Data;
 
 /*
  * Problem 1: "Classical" programming for digit classification
@@ -55,8 +56,15 @@ pub fn classify_zero_one(image: &Array2<f32>) -> u8 {
 ///
 /// Output:
 ///     1D array - sum of x + y
-pub fn vector_add(a: &Array1<f32>, b: &Array1<f32>) -> Array1<f32> {
-    todo!()
+///
+/// This is generic over 1D f32-based Arrays or ArrayViews (via ArrayBase).
+pub fn vector_add<S1, S2>(a: &ArrayBase<S1, Ix1>, b: &ArrayBase<S2, Ix1>) -> Array1<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(a.len(), b.len(), "Expecting arrays of the same size!");
+    a.iter().zip(b.iter()).map(|(&x, &y)| x + y).collect()
 }
 
 /*
@@ -80,8 +88,15 @@ pub fn vector_add(a: &Array1<f32>, b: &Array1<f32>) -> Array1<f32> {
 ///
 /// Output:
 ///     f32 - inner product <x, y>
-pub fn vector_inner_product(a: &Array1<f32>, b: &Array1<f32>) -> f32 {
-    todo!()
+pub fn vector_inner_product<S1, S2>(a: &ArrayBase<S1, Ix1>, b: &ArrayBase<S2, Ix1>) -> f32
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(a.len(), b.len(), "Expecting arrays of equal length!");
+    a.iter()
+        .zip(b.iter())
+        .fold(0.0, |acc, (&x, &y)| acc + x * y)
 }
 
 /*
@@ -108,8 +123,20 @@ pub fn vector_inner_product(a: &Array1<f32>, b: &Array1<f32>) -> f32 {
 ///
 /// Output:
 ///     1D array (m elements) - vector Ax
-pub fn matrix_vector_product_1(a: &Array2<f32>, b: &Array1<f32>) -> Array1<f32> {
-    todo!()
+pub fn matrix_vector_product_1<S1, S2>(
+    a: &ArrayBase<S1, Ix2>,
+    b: &ArrayBase<S2, Ix1>,
+) -> Array1<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimenstions!");
+
+    a.rows()
+        .into_iter()
+        .map(|row| vector_inner_product(&row, b))
+        .collect()
 }
 
 /*
