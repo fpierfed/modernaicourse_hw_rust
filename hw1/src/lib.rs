@@ -165,8 +165,24 @@ where
 ///
 /// Output:
 ///     1D array (m elements) - vector Ax
-pub fn matrix_vector_product_2(a: &Array2<f32>, b: &Array1<f32>) -> Array1<f32> {
-    todo!()
+pub fn matrix_vector_product_2<S1, S2>(
+    a: &ArrayBase<S1, Ix2>,
+    b: &ArrayBase<S2, Ix1>,
+) -> Array1<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimenstions!");
+    a.columns()
+        .into_iter()
+        .zip(b.iter())
+        .map(|(col, &x)| &col * x)
+        // We now need to fold that back into a 1D array
+        // by adding together all the columns into one.
+        // acc here is the first column initially.
+        .reduce(|acc, col| acc + col)
+        .unwrap()
 }
 
 /*
@@ -194,8 +210,22 @@ pub fn matrix_vector_product_2(a: &Array2<f32>, b: &Array1<f32>) -> Array1<f32> 
 ///
 /// Output:
 ///     1D array (n elements) - vector x^T A
-pub fn vector_matrix_product_2(v: &Array1<f32>, a: &Array2<f32>) -> Array1<f32> {
-    todo!()
+pub fn vector_matrix_product_2<S1, S2>(
+    v: &ArrayBase<S1, Ix1>,
+    a: &ArrayBase<S2, Ix2>,
+) -> Array1<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(a.shape()[0], v.len(), "Expecting compatible dimenstions!");
+
+    a.rows()
+        .into_iter()
+        .zip(v.iter())
+        .map(|(row, &x)| &row * x)
+        .reduce(|acc, row| acc + row)
+        .unwrap()
 }
 
 /*
@@ -219,8 +249,28 @@ pub fn vector_matrix_product_2(v: &Array1<f32>, a: &Array2<f32>) -> Array1<f32> 
 ///
 /// Output:
 ///     2D array (m x p) - matrix AB
-pub fn matmul_1(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
-    todo!()
+pub fn matmul_1<S1, S2>(a: &ArrayBase<S1, Ix2>, b: &ArrayBase<S2, Ix2>) -> Array2<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(
+        a.shape()[1],
+        b.shape()[0],
+        "Expecting compatible dimenstions!"
+    );
+
+    let m = a.shape()[0];
+    let p = b.shape()[1];
+    let mut result = Array2::zeros((m, p));
+
+    for i in 0..m {
+        for j in 0..p {
+            result[[i, j]] = vector_inner_product(&a.row(i), &b.column(j));
+        }
+    }
+
+    result
 }
 
 /*
