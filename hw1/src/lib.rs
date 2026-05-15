@@ -310,11 +310,9 @@ where
     let p = b.shape()[1];
     let mut result = Array2::zeros((m, p));
 
-    for i in 0..p {
+    for (i, mut res_col) in result.columns_mut().into_iter().enumerate() {
         let col = matrix_vector_product_1(a, &b.column(i));
-        for j in 0..m {
-            result[[j, i]] += col[j];
-        }
+        res_col.assign(&col);
     }
 
     result
