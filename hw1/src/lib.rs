@@ -295,8 +295,29 @@ where
 ///
 /// Output:
 ///     2D array (m x p) - matrix AB
-pub fn matmul_2(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
-    todo!()
+pub fn matmul_2<S1, S2>(a: &ArrayBase<S1, Ix2>, b: &ArrayBase<S2, Ix2>) -> Array2<f32>
+where
+    S1: Data<Elem = f32>,
+    S2: Data<Elem = f32>,
+{
+    assert_eq!(
+        a.shape()[1],
+        b.shape()[0],
+        "Expecting compatible dimenstions!"
+    );
+
+    let m = a.shape()[0];
+    let p = b.shape()[1];
+    let mut result = Array2::zeros((m, p));
+
+    for i in 0..p {
+        let col = matrix_vector_product_1(a, &b.column(i));
+        for j in 0..m {
+            result[[j, i]] += col[j];
+        }
+    }
+
+    result
 }
 
 /*
