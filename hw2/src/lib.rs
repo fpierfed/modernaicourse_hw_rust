@@ -55,27 +55,55 @@
  */
 
 use std::cell::RefCell;
+use std::ops::Add as StdAdd;
+use std::ops::Deref;
+use std::ops::Div as StdDiv;
+use std::ops::Mul as StdMul;
+use std::ops::Neg as StdNeg;
+use std::ops::Sub as StdSub;
 use std::rc::Rc;
 
 /// A node in the computation graph.
+
+// Here is the deal, if we want to implement Mul, Sub, Div etc. for Variables
+// so that we can just say `x + y` (or actually `&x + &y` since we do not want
+// to move them), then rust complains that we cannot do that. We would want to
+// say impl StdMul for Rc<RefCell<Variable>> and we get the error that we are
+// violating the Rust Orphan Rules (Error E0117).
+// The way out is to wrap the Rc<RefCell<Variable>> thing in our (tuple) struct
+// so that we do an impl StdMul on &Variable which is our own data type...
+// hence this wrapping of Variable and VariableData. Also useful to implement
+// Deref on Variable (the wrapper) so that we do not need to always type
+// x.0.borrow() etc. but rather x.borrow()...
 #[derive(Debug)]
-pub struct Variable {
+pub struct VariableData {
     pub value: f64,
     pub grad: Option<f64>,
     pub function: Option<Box<dyn Function>>,
-    pub parents: Vec<Rc<RefCell<Variable>>>,
+    pub parents: Vec<Variable>,
     pub num_children: usize,
 }
 
+#[derive(Debug, Clone)]
+pub struct Variable(pub Rc<RefCell<VariableData>>);
+
 impl Variable {
-    pub fn new(value: f64) -> Rc<RefCell<Self>> {
-        Rc::new(RefCell::new(Variable {
+    pub fn new(value: f64) -> Self {
+        Variable(Rc::new(RefCell::new(VariableData {
             value,
             grad: None,
             function: None,
             parents: vec![],
             num_children: 0,
-        }))
+        })))
+    }
+}
+
+impl Deref for Variable {
+    type Target = RefCell<VariableData>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -83,6 +111,69 @@ impl Variable {
 pub trait Function: std::fmt::Debug {
     fn forward(&self, inputs: &[f64]) -> f64;
     fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64>;
+}
+
+fn apply<F>(func: F, args: Vec<Variable>) -> Variable
+where
+    F: Function + 'static,
+{
+    let inputs: Vec<f64> = args.iter().map(|v| v.borrow().value).collect();
+
+    let result = Variable::new(func.forward(&inputs));
+    {
+        let mut result = result.borrow_mut();
+        // This is a shallow copy whic then increases the Rc count of each
+        // Variable inside the Vec.
+        result.parents = args.clone();
+        result.function = Some(Box::new(func));
+    }
+
+    for arg in args {
+        arg.borrow_mut().num_children += 1;
+    }
+    result
+}
+
+// Implement standard arithmetic ops on Variable.
+impl StdAdd for &Variable {
+    type Output = Variable;
+
+    fn add(self, other: Self) -> Self::Output {
+        // This only increments the Rc counts
+        apply(Add, vec![self.clone(), other.clone()])
+    }
+}
+
+impl StdSub for &Variable {
+    type Output = Variable;
+
+    fn sub(self, other: Self) -> Self::Output {
+        apply(Subtract, vec![self.clone(), other.clone()])
+    }
+}
+
+impl StdMul for &Variable {
+    type Output = Variable;
+
+    fn mul(self, other: Self) -> Self::Output {
+        apply(Multiply, vec![self.clone(), other.clone()])
+    }
+}
+
+impl StdDiv for &Variable {
+    type Output = Variable;
+
+    fn div(self, other: Self) -> Self::Output {
+        apply(Divide, vec![self.clone(), other.clone()])
+    }
+}
+
+impl StdNeg for &Variable {
+    type Output = Variable;
+
+    fn neg(self) -> Self::Output {
+        apply(Negate, vec![self.clone()])
+    }
 }
 
 /*
@@ -93,32 +184,116 @@ pub trait Function: std::fmt::Debug {
  * even if there is only a single argument.
  */
 
+/// Implements multiplication: f(x, y) = x * y
+/// Partials: df/dx = y, df/dy = x
+#[derive(Debug)]
+pub struct Multiply;
+
+impl Function for Multiply {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 2, "Expecting two elements!");
+        inputs[0] * inputs[1]
+    }
+
+    fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
+        let x = inputs[0];
+        let y = inputs[1];
+        vec![y * grad, x * grad]
+    }
+}
+
+/// Implements negation: f(x) = -x
+/// Partial: df/dx = -1
+#[derive(Debug)]
+pub struct Negate;
+
+impl Function for Negate {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 1, "Expecting one element!");
+        let x = inputs[0];
+        -x
+    }
+
+    fn backward(&self, grad: f64, _inputs: &[f64]) -> Vec<f64> {
+        vec![-grad]
+    }
+}
+
 /// Implements addition: f(x, y) = x + y
 /// Partials: df/dx = 1, df/dy = 1
 #[derive(Debug)]
 pub struct Add;
+
+impl Function for Add {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        inputs.iter().sum()
+    }
+
+    fn backward(&self, grad: f64, _inputs: &[f64]) -> Vec<f64> {
+        vec![grad, grad]
+    }
+}
 
 /// Implements subtraction: f(x, y) = x - y
 /// Partials: df/dx = 1, df/dy = -1
 #[derive(Debug)]
 pub struct Subtract;
 
-/// Implements multiplication: f(x, y) = x * y
-/// Partials: df/dx = y, df/dy = x
-#[derive(Debug)]
-pub struct Multiply;
+impl Function for Subtract {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 2, "Expecting two elements!");
+        inputs[0] - inputs[1]
+    }
+
+    fn backward(&self, grad: f64, _inputs: &[f64]) -> Vec<f64> {
+        vec![grad, -grad]
+    }
+}
 
 /// Implements division: f(x, y) = x / y
 /// Partials: df/dx = 1/y, df/dy = -x/y^2
 #[derive(Debug)]
 pub struct Divide;
 
+impl Function for Divide {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 2, "Expecting two elements!");
+        inputs[0] / inputs[1]
+    }
+
+    fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
+        let x = inputs[0];
+        let y = inputs[1];
+        vec![grad / y, -x * grad / (y * y)]
+    }
+}
+
 /// Implements power: f(x) = x^d
 /// The degree d is stored in the struct (not differentiated w.r.t. d).
 /// Partial: df/dx = d * x^(d-1). Handle d=0 case (derivative is 0).
 #[derive(Debug)]
 pub struct Power {
-    pub degree: i32,
+    pub degree: f64,
+}
+
+impl Function for Power {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 1, "Expecting one element!");
+        if self.degree == 0.0 {
+            1.0
+        } else {
+            inputs[0].powf(self.degree)
+        }
+    }
+
+    fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
+        if self.degree == 0.0 {
+            vec![0.0]
+        } else {
+            let x = inputs[0];
+            vec![self.degree * grad * x.powf(self.degree - 1.0)]
+        }
+    }
 }
 
 /// Implements natural logarithm: f(x) = ln(x)
@@ -126,15 +301,34 @@ pub struct Power {
 #[derive(Debug)]
 pub struct Log;
 
+impl Function for Log {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 1, "Expecting one element!");
+        inputs[0].ln()
+    }
+
+    fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
+        let x = inputs[0];
+        vec![grad / x]
+    }
+}
+
 /// Implements exponential: f(x) = e^x
 /// Partial: df/dx = e^x
 #[derive(Debug)]
 pub struct Exp;
 
-/// Implements negation: f(x) = -x
-/// Partial: df/dx = -1
-#[derive(Debug)]
-pub struct Negate;
+impl Function for Exp {
+    fn forward(&self, inputs: &[f64]) -> f64 {
+        assert_eq!(inputs.len(), 1, "Expecting one element!");
+        f64::exp(inputs[0])
+    }
+
+    fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
+        let x = inputs[0];
+        vec![f64::exp(x) * grad]
+    }
+}
 
 // TODO: Implement Function trait for each operation.
 
@@ -149,8 +343,52 @@ pub struct Negate;
 
 /// Compute gradients via reverse-mode autodiff (backpropagation).
 /// Call on the output variable; fills in .grad for all ancestors.
-pub fn compute_gradients(_output: &Rc<RefCell<Variable>>) {
-    todo!()
+impl Variable {
+    pub fn compute_gradients(&self) {
+        // Here we are in a bit of a pickle: We need to brrow/borrow_mut self
+        // so that we can access the fields in the VariableData inside our
+        // Variable instance self and chage them etc. HOWEVER this is a recursive
+        // function, which means that we cannot just borrow forever. We need to
+        // borrow and assign to new variables and drop the borrow before we
+        // recurse!
+        if self.borrow().grad.is_none() {
+            self.borrow_mut().grad = Some(1.0);
+        }
+
+        if self.borrow().function.is_none() || self.borrow().parents.is_empty() {
+            return;
+        }
+
+        // Keep what we need and drop the borrow.
+        let (grad_partials_products, parents) = {
+            let inner = self.borrow();
+
+            let inputs: Vec<f64> = inner.parents.iter().map(|p| p.borrow().value).collect();
+            let func = inner.function.as_ref().unwrap();
+            let grad = inner.grad.unwrap();
+
+            (func.backward(grad, &inputs), inner.parents.clone())
+        };
+
+        for (i, parent) in parents.iter().enumerate() {
+            let mut call_recursively = false;
+
+            {
+                let mut parent_mut = parent.borrow_mut();
+                let current_grad = parent_mut.grad.unwrap_or(0.0);
+                parent_mut.grad = Some(current_grad + grad_partials_products[i]);
+
+                parent_mut.num_children -= 1;
+                if parent_mut.num_children == 0 {
+                    call_recursively = true;
+                }
+            }
+            // Do not use the borrow here!!!
+            if call_recursively {
+                parent.compute_gradients()
+            }
+        }
+    }
 }
 
 /*

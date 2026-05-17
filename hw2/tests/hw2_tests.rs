@@ -11,20 +11,20 @@ fn assert_close(actual: f64, expected: f64) {
     );
 }
 
-fn apply_fn(func: Box<dyn Function>, args: &[&Rc<RefCell<Variable>>]) -> Rc<RefCell<Variable>> {
+fn apply_fn(func: Box<dyn Function>, args: &[Variable]) -> Variable {
     let inputs: Vec<f64> = args.iter().map(|a| a.borrow().value).collect();
     let value = func.forward(&inputs);
     for a in args {
         a.borrow_mut().num_children += 1;
     }
-    let parents: Vec<Rc<RefCell<Variable>>> = args.iter().map(|a| Rc::clone(a)).collect();
-    Rc::new(RefCell::new(Variable {
+    let parents: Vec<Variable> = args.iter().map(|a| Clone::clone(a)).collect();
+    Variable(Rc::new(RefCell::new(VariableData {
         value,
         grad: None,
         function: Some(func),
         parents,
         num_children: 0,
-    }))
+    })))
 }
 
 // --- Function forward/backward tests ---
@@ -91,13 +91,13 @@ fn test_divide_alternate_values() {
 
 #[test]
 fn test_power_forward_backward() {
-    let f = Power { degree: 3 };
+    let f = Power { degree: 3.0 };
     assert_eq!(f.forward(&[2.0]), 8.0);
     let g = f.backward(2.0, &[2.0]);
     assert_eq!(g.len(), 1);
     assert_eq!(g[0], 24.0);
 
-    let f0 = Power { degree: 0 };
+    let f0 = Power { degree: 0.0 };
     assert_eq!(f0.forward(&[5.0]), 1.0);
     let g0 = f0.backward(7.0, &[5.0]);
     assert_eq!(g0.len(), 1);
@@ -106,13 +106,13 @@ fn test_power_forward_backward() {
 
 #[test]
 fn test_power_alternate_values() {
-    let f = Power { degree: 3 };
+    let f = Power { degree: 3.0 };
     assert_close(f.forward(&[-2.0]), -8.0);
     let g = f.backward(1.5, &[-2.0]);
     assert_eq!(g.len(), 1);
     assert_close(g[0], 18.0);
 
-    let f0 = Power { degree: 0 };
+    let f0 = Power { degree: 0.0 };
     let g0 = f0.backward(7.0, &[5.0]);
     assert_eq!(g0.len(), 1);
     assert_close(g0[0], 0.0);
@@ -154,6 +154,20 @@ fn test_exp_alternate_values() {
     assert_close(g[0], 1.2130613194252668);
 }
 
+// --- More complex arithmetic tests ---
+
+#[test]
+fn test_arithmetic_ops1() {
+    let x = Variable::new(3.0);
+    let y = Variable::new(5.0);
+    let xy = &x * &y;
+    let xx = &x * &x;
+    let sum = &xy + &xx;
+    let d = &sum / &y;
+    assert_eq!(d.borrow().value, 4.8);
+    assert_eq!(d.borrow().grad, None);
+}
+
 // --- Gradient computation test ---
 
 #[test]
@@ -165,21 +179,21 @@ fn test_compute_gradients() {
     let y = Variable::new(4.0);
 
     // Build: x * y
-    let xy = apply_fn(Box::new(Multiply), &[&x, &y]);
+    let xy = apply_fn(Box::new(Multiply), &[x.clone(), y.clone()]);
     // -(x * y)
-    let neg_xy = apply_fn(Box::new(Negate), &[&xy]);
+    let neg_xy = apply_fn(Box::new(Negate), &[xy.clone()]);
     // -(x*y) * x
-    let neg_xy_x = apply_fn(Box::new(Multiply), &[&neg_xy, &x]);
+    let neg_xy_x = apply_fn(Box::new(Multiply), &[neg_xy.clone(), x.clone()]);
     // -(x*y) * x * x
-    let neg_xy_xx = apply_fn(Box::new(Multiply), &[&neg_xy_x, &x]);
+    let neg_xy_xx = apply_fn(Box::new(Multiply), &[neg_xy_x.clone(), x.clone()]);
     // -y
-    let neg_y = apply_fn(Box::new(Negate), &[&y]);
+    let neg_y = apply_fn(Box::new(Negate), &[y.clone()]);
     // (-(x*y)*x*x) * (-y)
-    let z = apply_fn(Box::new(Multiply), &[&neg_xy_xx, &neg_y]);
+    let z = apply_fn(Box::new(Multiply), &[neg_xy_xx.clone(), neg_y.clone()]);
 
     assert!((z.borrow().value - 432.0).abs() < EPS);
 
-    compute_gradients(&z);
+    z.compute_gradients();
 
     assert!((z.borrow().grad.unwrap() - 1.0).abs() < EPS);
     assert!(
@@ -198,7 +212,7 @@ fn test_compute_gradients() {
 fn test_compute_gradients_leaf() {
     // Calling compute_gradients on a leaf variable should set its grad to 1.0
     let w = Variable::new(-2.0);
-    compute_gradients(&w);
+    w.compute_gradients();
     assert!((w.borrow().grad.unwrap() - 1.0).abs() < EPS);
 }
 
@@ -207,18 +221,18 @@ fn test_compute_gradients_reused_intermediate() {
     let x = Variable::new(1.5);
     let y = Variable::new(-2.0);
 
-    let xy = apply_fn(Box::new(Multiply), &[&x, &y]);
-    let neg_x = apply_fn(Box::new(Negate), &[&x]);
-    let xy_neg_x = apply_fn(Box::new(Multiply), &[&xy, &neg_x]);
-    let neg_y = apply_fn(Box::new(Negate), &[&y]);
-    let a = apply_fn(Box::new(Multiply), &[&xy_neg_x, &neg_y]);
-    let a_squared = apply_fn(Box::new(Multiply), &[&a, &a]);
-    let z = apply_fn(Box::new(Negate), &[&a_squared]);
+    let xy = apply_fn(Box::new(Multiply), &[x.clone(), y.clone()]);
+    let neg_x = apply_fn(Box::new(Negate), &[x.clone()]);
+    let xy_neg_x = apply_fn(Box::new(Multiply), &[xy.clone(), neg_x.clone()]);
+    let neg_y = apply_fn(Box::new(Negate), &[y.clone()]);
+    let a = apply_fn(Box::new(Multiply), &[xy_neg_x.clone(), neg_y.clone()]);
+    let a_squared = apply_fn(Box::new(Multiply), &[a.clone(), a.clone()]);
+    let z = apply_fn(Box::new(Negate), &[a_squared.clone()]);
 
     assert_close(a.borrow().value, 9.0);
     assert_close(z.borrow().value, -81.0);
 
-    compute_gradients(&z);
+    z.compute_gradients();
 
     assert_close(a.borrow().grad.unwrap(), -18.0);
     assert_close(x.borrow().grad.unwrap(), -216.0);
