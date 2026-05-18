@@ -1,6 +1,4 @@
 use hw2::*;
-use std::cell::RefCell;
-use std::rc::Rc;
 
 const EPS: f64 = 1e-6;
 
@@ -9,22 +7,6 @@ fn assert_close(actual: f64, expected: f64) {
         (actual - expected).abs() < EPS,
         "actual {actual}, expected {expected}"
     );
-}
-
-fn apply_fn(func: Box<dyn Function>, args: &[Variable]) -> Variable {
-    let inputs: Vec<f64> = args.iter().map(|a| a.borrow().value).collect();
-    let value = func.forward(&inputs);
-    for a in args {
-        a.borrow_mut().num_children += 1;
-    }
-    let parents: Vec<Variable> = args.iter().map(|a| Clone::clone(a)).collect();
-    Variable(Rc::new(RefCell::new(VariableData {
-        value,
-        grad: None,
-        function: Some(func),
-        parents,
-        num_children: 0,
-    })))
 }
 
 // --- Function forward/backward tests ---
@@ -178,18 +160,12 @@ fn test_compute_gradients() {
     let x = Variable::new(3.0);
     let y = Variable::new(4.0);
 
-    // Build: x * y
-    let xy = apply_fn(Box::new(Multiply), &[x.clone(), y.clone()]);
-    // -(x * y)
-    let neg_xy = apply_fn(Box::new(Negate), &[xy.clone()]);
-    // -(x*y) * x
-    let neg_xy_x = apply_fn(Box::new(Multiply), &[neg_xy.clone(), x.clone()]);
-    // -(x*y) * x * x
-    let neg_xy_xx = apply_fn(Box::new(Multiply), &[neg_xy_x.clone(), x.clone()]);
-    // -y
-    let neg_y = apply_fn(Box::new(Negate), &[y.clone()]);
-    // (-(x*y)*x*x) * (-y)
-    let z = apply_fn(Box::new(Multiply), &[neg_xy_xx.clone(), neg_y.clone()]);
+    let xy = &x * &y;
+    let neg_xy = -&xy;
+    let neg_xy_x = &neg_xy * &x;
+    let neg_xy_xx = &neg_xy_x * &x;
+    let neg_y = -&y;
+    let z = &neg_xy_xx * &neg_y;
 
     assert!((z.borrow().value - 432.0).abs() < EPS);
 
@@ -220,14 +196,13 @@ fn test_compute_gradients_leaf() {
 fn test_compute_gradients_reused_intermediate() {
     let x = Variable::new(1.5);
     let y = Variable::new(-2.0);
-
-    let xy = apply_fn(Box::new(Multiply), &[x.clone(), y.clone()]);
-    let neg_x = apply_fn(Box::new(Negate), &[x.clone()]);
-    let xy_neg_x = apply_fn(Box::new(Multiply), &[xy.clone(), neg_x.clone()]);
-    let neg_y = apply_fn(Box::new(Negate), &[y.clone()]);
-    let a = apply_fn(Box::new(Multiply), &[xy_neg_x.clone(), neg_y.clone()]);
-    let a_squared = apply_fn(Box::new(Multiply), &[a.clone(), a.clone()]);
-    let z = apply_fn(Box::new(Negate), &[a_squared.clone()]);
+    let xy = &x * &y;
+    let neg_x = -&x;
+    let xy_neg_x = &xy * &neg_x;
+    let neg_y = -&y;
+    let a = &xy_neg_x * &neg_y;
+    let a_squared = &a * &a;
+    let z = -&a_squared;
 
     assert_close(a.borrow().value, 9.0);
     assert_close(z.borrow().value, -81.0);

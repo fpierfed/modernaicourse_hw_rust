@@ -226,7 +226,7 @@ pub struct Add;
 
 impl Function for Add {
     fn forward(&self, inputs: &[f64]) -> f64 {
-        inputs.iter().sum()
+        inputs[0] + inputs[1]
     }
 
     fn backward(&self, grad: f64, _inputs: &[f64]) -> Vec<f64> {
@@ -279,11 +279,7 @@ pub struct Power {
 impl Function for Power {
     fn forward(&self, inputs: &[f64]) -> f64 {
         assert_eq!(inputs.len(), 1, "Expecting one element!");
-        if self.degree == 0.0 {
-            1.0
-        } else {
-            inputs[0].powf(self.degree)
-        }
+        inputs[0].powf(self.degree)
     }
 
     fn backward(&self, grad: f64, inputs: &[f64]) -> Vec<f64> {
@@ -351,15 +347,22 @@ impl Variable {
         // function, which means that we cannot just borrow forever. We need to
         // borrow and assign to new variables and drop the borrow before we
         // recurse!
-        if self.borrow().grad.is_none() {
-            self.borrow_mut().grad = Some(1.0);
+        {
+            // Just to avoid borrowing three times!
+            let mut inner = self.borrow_mut();
+
+            if inner.grad.is_none() {
+                inner.grad = Some(1.0);
+            }
+
+            if inner.function.is_none() || inner.parents.is_empty() {
+                return;
+            }
         }
 
-        if self.borrow().function.is_none() || self.borrow().parents.is_empty() {
-            return;
-        }
-
-        // Keep what we need and drop the borrow.
+        // Keep what we need and drop the borrow. The issue here is that a borrow_mut()
+        // on a RefCell does not mix well with recursion as the underlying data can
+        // end up being borrow_mut-ed many time in the same call stack.
         let (grad_partials_products, parents) = {
             let inner = self.borrow();
 
@@ -367,6 +370,7 @@ impl Variable {
             let func = inner.function.as_ref().unwrap();
             let grad = inner.grad.unwrap();
 
+            // Clone parents to end the RefCell borrow before recursive calls.
             (func.backward(grad, &inputs), inner.parents.clone())
         };
 
