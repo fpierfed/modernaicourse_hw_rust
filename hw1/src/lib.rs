@@ -138,7 +138,7 @@ where
     S1: Data<Elem = f32>,
     S2: Data<Elem = f32>,
 {
-    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimenstions!");
+    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimensions!");
 
     a.rows()
         .into_iter()
@@ -180,7 +180,7 @@ where
     S1: Data<Elem = f32>,
     S2: Data<Elem = f32>,
 {
-    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimenstions!");
+    assert_eq!(a.shape()[1], b.len(), "Expecting compatible dimensions!");
     a.columns()
         .into_iter()
         .zip(b.iter())
@@ -189,7 +189,7 @@ where
         // by adding together all the columns into one.
         // acc here is the first column initially.
         .reduce(|acc, col| acc + col)
-        .unwrap()
+        .unwrap_or_else(|| Array1::zeros(a.shape()[0]))
 }
 
 /*
@@ -225,14 +225,14 @@ where
     S1: Data<Elem = f32>,
     S2: Data<Elem = f32>,
 {
-    assert_eq!(a.shape()[0], v.len(), "Expecting compatible dimenstions!");
+    assert_eq!(a.shape()[0], v.len(), "Expecting compatible dimensions!");
 
     a.rows()
         .into_iter()
         .zip(v.iter())
         .map(|(row, &x)| &row * x)
         .reduce(|acc, row| acc + row)
-        .unwrap()
+        .unwrap_or_else(|| Array1::zeros(a.shape()[0]))
 }
 
 /*
@@ -264,7 +264,7 @@ where
     assert_eq!(
         a.shape()[1],
         b.shape()[0],
-        "Expecting compatible dimenstions!"
+        "Expecting compatible dimensions!"
     );
 
     let m = a.shape()[0];
@@ -310,7 +310,7 @@ where
     assert_eq!(
         a.shape()[1],
         b.shape()[0],
-        "Expecting compatible dimenstions!"
+        "Expecting compatible dimensions!"
     );
 
     let m = a.shape()[0];
@@ -358,7 +358,7 @@ where
     assert_eq!(
         a.shape()[1],
         b.shape()[0],
-        "Expecting compatible dimenstions!"
+        "Expecting compatible dimensions!"
     );
 
     let m = a.shape()[0];
@@ -442,7 +442,7 @@ where
     assert_eq!(
         a.shape()[1],
         b.shape()[0],
-        "Expecting compatible dimenstions!"
+        "Expecting compatible dimensions!"
     );
     assert_eq!(a.shape()[0] % 4, 0, "Expecting dimensions multiple of 4!");
     assert_eq!(a.shape()[1] % 4, 0, "Expecting dimensions multiple of 4!");
@@ -508,7 +508,7 @@ where
     assert_eq!(
         a.shape().len(),
         b.shape().len(),
-        "Expecting the same number of dimenstions!"
+        "Expecting the same number of dimensions!"
     );
 
     let n: usize = a.shape().len();
