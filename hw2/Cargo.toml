@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 ndarray = { workspace = true }
+ndarray-stats = { workspace = true }
 
 [dev-dependencies]
 approx = { workspace = true }

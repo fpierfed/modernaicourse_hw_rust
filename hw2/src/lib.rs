@@ -66,6 +66,7 @@ use std::rc::Rc;
 
 use ndarray::prelude::*;
 use ndarray::Data;
+use ndarray_stats::QuantileExt;
 
 /// A node in the computation graph.
 
@@ -470,7 +471,15 @@ where
     S1: Data<Elem = f64>,
     S2: Data<Elem = usize>,
 {
-    todo!()
+    let mut correct = 0.0;
+    for (i, true_class) in y.into_iter().enumerate() {
+        let prediction = y_pred.row(i).argmax().unwrap();
+        if prediction == *true_class {
+            correct += 1.0;
+        }
+    }
+
+    1.0 - correct / y.shape()[0] as f64
 }
 
 /*
