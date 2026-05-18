@@ -1,4 +1,5 @@
 use hw2::*;
+use ndarray::prelude::*;
 
 const EPS: f64 = 1e-6;
 
@@ -218,20 +219,20 @@ fn test_compute_gradients_reused_intermediate() {
 
 #[test]
 fn test_cross_entropy_loss() {
-    let y_pred = vec![vec![2.0, 1.0, 0.0], vec![0.0, 2.0, 1.0]];
-    let y = vec![0, 2];
+    let y_pred = array![[2.0, 1.0, 0.0], [0.0, 2.0, 1.0]];
+    let y = array![0, 2];
     let loss = cross_entropy_loss(&y_pred, &y);
     assert!((loss - 0.9076060056686401).abs() < 1e-6);
 }
 
 #[test]
 fn test_cross_entropy_loss_three_class_batch() {
-    let y_pred = vec![
-        vec![1.0, 0.0, -1.0],
-        vec![2.0, 1.0, 0.0],
-        vec![-1.0, 2.0, 1.0],
+    let y_pred = array![
+        [1.0, 0.0, -1.0],
+        [2.0, 1.0, 0.0],
+        [-1.0, 2.0, 1.0],
     ];
-    let y = vec![0, 2, 1];
+    let y = array![0, 2, 1];
     let loss = cross_entropy_loss(&y_pred, &y);
     assert!((loss - 1.054741381885649).abs() < 1e-6);
 }
@@ -240,13 +241,13 @@ fn test_cross_entropy_loss_three_class_batch() {
 
 #[test]
 fn test_error() {
-    let y_pred = vec![
-        vec![3.0, 1.0],
-        vec![0.0, 2.0],
-        vec![1.0, 1.0],
-        vec![-1.0, 0.0],
+    let y_pred = array![
+        [3.0, 1.0],
+        [0.0, 2.0],
+        [1.0, 1.0],
+        [-1.0, 0.0],
     ];
-    let y = vec![0, 1, 1, 1];
+    let y = array![0, 1, 1, 1];
     let err = error(&y_pred, &y);
     assert!((err - 0.25).abs() < 1e-6);
 }
@@ -255,25 +256,24 @@ fn test_error() {
 
 #[test]
 fn test_train_sgd_one_epoch() {
-    let x = vec![
-        vec![2.0, 1.0],
-        vec![1.0, 2.0],
-        vec![-2.0, -1.0],
-        vec![-1.0, -2.0],
+    let x = array![
+        [2.0, 1.0],
+        [1.0, 2.0],
+        [-2.0, -1.0],
+        [-1.0, -2.0],
     ];
-    let y = vec![1, 1, 0, 0];
+    let y = array![1, 1, 0, 0];
 
     let w = train_sgd(&x, &y, 2, 1, 0.1, 2);
-    let expected = vec![vec![-0.13340412, -0.13340412], vec![0.13340412, 0.13340412]];
-    assert_eq!(w.len(), 2);
-    assert_eq!(w[0].len(), 2);
+    let expected = array![[-0.13340412, -0.13340412], [0.13340412, 0.13340412]];
+    assert_eq!(w.shape(), &[2, 2]);
     for i in 0..2 {
         for j in 0..2 {
             assert!(
-                (w[i][j] - expected[i][j]).abs() < 1e-5,
-                "w[{i}][{j}] = {}, expected {}",
-                w[i][j],
-                expected[i][j]
+                (w[[i, j]] - expected[[i, j]]).abs() < 1e-5,
+                "w[[{i}, {j}]] = {}, expected {}",
+                w[[i, j]],
+                expected[[i, j]]
             );
         }
     }
@@ -281,22 +281,22 @@ fn test_train_sgd_one_epoch() {
 
 #[test]
 fn test_train_sgd() {
-    let x = vec![
-        vec![2.0, 1.0],
-        vec![1.0, 2.0],
-        vec![-2.0, -1.0],
-        vec![-1.0, -2.0],
+    let x = array![
+        [2.0, 1.0],
+        [1.0, 2.0],
+        [-2.0, -1.0],
+        [-1.0, -2.0],
     ];
-    let y = vec![1, 1, 0, 0];
+    let y = array![1, 1, 0, 0];
 
     let w = train_sgd(&x, &y, 2, 20, 0.1, 2);
-    assert_eq!(w.len(), 2);
-    assert_eq!(w[0].len(), 2);
+    assert_eq!(w.shape(), &[2, 2]);
 
     // Verify predictions are correct after training
-    for (xi, &yi) in x.iter().zip(y.iter()) {
+    for (i, xi) in x.axis_iter(Axis(0)).enumerate() {
+        let yi = y[i];
         let scores: Vec<f64> = w
-            .iter()
+            .axis_iter(Axis(0))
             .map(|wj| wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum())
             .collect();
         let pred = scores
@@ -307,26 +307,26 @@ fn test_train_sgd() {
             .0;
         assert_eq!(pred, yi);
     }
-    assert!(w.iter().flatten().any(|wij| wij.abs() > EPS));
+    assert!(w.iter().any(|&wij| wij.abs() > EPS));
 }
 
 #[test]
 fn test_train_sgd_fifteen_epochs() {
-    let x = vec![
-        vec![2.0, 1.0],
-        vec![1.0, 2.0],
-        vec![-2.0, -1.0],
-        vec![-1.0, -2.0],
+    let x = array![
+        [2.0, 1.0],
+        [1.0, 2.0],
+        [-2.0, -1.0],
+        [-1.0, -2.0],
     ];
-    let y = vec![1, 1, 0, 0];
+    let y = array![1, 1, 0, 0];
 
     let w = train_sgd(&x, &y, 2, 15, 0.1, 2);
-    assert_eq!(w.len(), 2);
-    assert_eq!(w[0].len(), 2);
+    assert_eq!(w.shape(), &[2, 2]);
 
-    for (xi, &yi) in x.iter().zip(y.iter()) {
+    for (i, xi) in x.axis_iter(Axis(0)).enumerate() {
+        let yi = y[i];
         let scores: Vec<f64> = w
-            .iter()
+            .axis_iter(Axis(0))
             .map(|wj| wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum())
             .collect();
         let pred = scores
@@ -338,6 +338,6 @@ fn test_train_sgd_fifteen_epochs() {
         assert_eq!(pred, yi);
     }
 
-    let norm = w.iter().flatten().map(|wij| wij * wij).sum::<f64>().sqrt();
+    let norm = w.iter().map(|&wij| wij * wij).sum::<f64>().sqrt();
     assert!(norm > EPS, "trained weights should not stay at zero");
 }

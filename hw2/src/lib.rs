@@ -54,6 +54,7 @@
  *       update W by taking a step in the direction of negative gradient
  */
 
+use core::f64;
 use std::cell::RefCell;
 use std::ops::Add as StdAdd;
 use std::ops::Deref;
@@ -62,6 +63,9 @@ use std::ops::Mul as StdMul;
 use std::ops::Neg as StdNeg;
 use std::ops::Sub as StdSub;
 use std::rc::Rc;
+
+use ndarray::prelude::*;
+use ndarray::Data;
 
 /// A node in the computation graph.
 
@@ -80,6 +84,9 @@ pub struct VariableData {
     pub value: f64,
     pub grad: Option<f64>,
     pub function: Option<Box<dyn Function>>,
+    // This could be a reference cycle but since the graph is a DAG (enforced
+    // in apply() practically speaking), this code and the definition of
+    // Variable below do not create cycles and do not leak.
     pub parents: Vec<Variable>,
     pub num_children: usize,
 }
@@ -326,8 +333,6 @@ impl Function for Exp {
     }
 }
 
-// TODO: Implement Function trait for each operation.
-
 /*
  * Question 2 - Implementing the full backward pass (compute_gradients)
  *
@@ -406,6 +411,27 @@ impl Variable {
  * The error is the fraction of predictions that are wrong (argmax of y_pred != y).
  */
 
+// ndarray does not have this function...
+pub fn logsumexp<S>(x: &ArrayBase<S, Ix2>) -> Array1<f64>
+where
+    S: Data<Elem = f64>,
+{
+    //
+    // The mathematically stable formula for logsumexp is
+    //   logsumexp(x) = max(x) = ln(sum(exp(x_i - max(x))))
+    //
+
+    let max_x = x.map_axis(Axis(1), |row| {
+        row.fold(f64::NEG_INFINITY, |acc, &val| acc.max(val))
+    });
+
+    x.rows()
+        .into_iter()
+        .zip(max_x)
+        .map(|(row, max_row)| max_row + row.mapv(|val| (val - max_row).exp()).sum().ln())
+        .collect()
+}
+
 /// Compute the average cross entropy loss between predictions and desired outputs.
 ///
 /// Input:
@@ -414,20 +440,36 @@ impl Variable {
 ///
 /// Output:
 ///     f64 - average cross entropy loss
-pub fn cross_entropy_loss(y_pred: &[Vec<f64>], y: &[usize]) -> f64 {
-    todo!()
+pub fn cross_entropy_loss<S1, S2>(y_pred: &ArrayBase<S1, Ix2>, y: &ArrayBase<S2, Ix1>) -> f64
+where
+    S1: Data<Elem = f64>,
+    S2: Data<Elem = usize>,
+{
+    let mut total_loss = 0.0;
+    let logsumexp_preds = logsumexp(y_pred);
+
+    for (i, true_class) in y.into_iter().enumerate() {
+        let predicted_class = y_pred[[i, *true_class]];
+
+        total_loss += -predicted_class + logsumexp_preds[i];
+    }
+    total_loss / y.shape()[0] as f64
 }
 
 /// Compute the average error between predictions and desired outputs, assuming
 /// we make a "hard" prediction of whichever class has the highest predicted value.
 ///
 /// Input:
-///     y_pred: slice of Vec<f64> (N x k) - each row is predicted outputs
-///     y: slice of usize (N) - each element is the desired class
+///     y_pred: 2D array (N x k) - each row is predicted outputs
+///     y: 1D array (N) - each element is the desired class
 ///
 /// Output:
 ///     f64 - average error rate
-pub fn error(y_pred: &[Vec<f64>], y: &[usize]) -> f64 {
+pub fn error<S1, S2>(y_pred: &ArrayBase<S1, Ix2>, y: &ArrayBase<S2, Ix1>) -> f64
+where
+    S1: Data<Elem = f64>,
+    S2: Data<Elem = usize>,
+{
     todo!()
 }
 
@@ -445,22 +487,26 @@ pub fn error(y_pred: &[Vec<f64>], y: &[usize]) -> f64 {
 /// Run minibatch stochastic gradient descent to minimize cross entropy loss.
 ///
 /// Inputs:
-///     x: slice of Vec<f64> (N x n) - training inputs
-///     y: slice of usize (N) - desired outputs in 0..k-1
+///     x: 2D array (N x n) - training inputs
+///     y: 1D array (N) - desired outputs in 0..k-1
 ///     n_classes: number of classes k
 ///     epochs: number of passes over the training set
 ///     step_size: gradient descent step size
 ///     batch_size: number of examples in a minibatch
 ///
 /// Output:
-///     Vec<Vec<f64>> (k x n) - trained linear classifier weights
-pub fn train_sgd(
-    x: &[Vec<f64>],
-    y: &[usize],
+///     2D array (k x n) - trained linear classifier weights
+pub fn train_sgd<S1, S2>(
+    x: &ArrayBase<S1, Ix2>,
+    y: &ArrayBase<S2, Ix1>,
     n_classes: usize,
     epochs: usize,
     step_size: f64,
     batch_size: usize,
-) -> Vec<Vec<f64>> {
+) -> Array2<f64>
+where
+    S1: Data<Elem = f64>,
+    S2: Data<Elem = usize>,
+{
     todo!()
 }
