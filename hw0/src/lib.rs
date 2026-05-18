@@ -195,7 +195,7 @@ pub fn poly_add(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
 pub fn poly_mul(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
     let len_p1 = p1.coefficients.len();
     let len_p2 = p2.coefficients.len();
-    let mut coefficients = vec![0.0; len_p1 * len_p2];
+    let mut coefficients = vec![0.0; len_p1 + len_p2 - 1];
 
     for i in 0..len_p1 {
         for j in 0..len_p2 {
@@ -226,11 +226,12 @@ pub fn poly_mul(p1: &Polynomial, p2: &Polynomial) -> Polynomial {
 /// Output:
 ///     Polynomial corresponding to the derivative of p with respect to x
 pub fn poly_derivative(p: &Polynomial) -> Polynomial {
-    let mut coefficients: Vec<f64> = (1..p.coefficients.len())
+    if p.coefficients.len() <= 1 {
+        return Polynomial::new(vec![0.0]);
+    }
+
+    let coefficients: Vec<f64> = (1..p.coefficients.len())
         .map(|i| p.coefficients[i] * i as f64)
         .collect();
-    // This push/append handles the case of a 0 order polynomial
-    // See new() above and if len > 1 ...
-    coefficients.push(0.0);
     Polynomial::new(coefficients)
 }
