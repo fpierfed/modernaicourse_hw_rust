@@ -66,9 +66,9 @@ use std::rc::Rc;
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
-use burn::tensor::{Int, Tensor};
+use burn::tensor::{s, Int, Tensor};
 
-pub type B = Autodiff<NdArray<f32>>;
+pub type B = Autodiff<NdArray<f64>>;
 
 /// A node in the computation graph.
 
@@ -417,8 +417,11 @@ impl Variable {
 // Helper: compute logsumexp along dim 1 (rows) for numerical stability.
 // logsumexp(x) = max(x) + ln(sum(exp(x - max(x))))
 #[allow(dead_code)]
-fn logsumexp(_x: Tensor<B, 2>) -> Tensor<B, 1> {
-    todo!();
+fn logsumexp(x: Tensor<B, 2>, dim: usize) -> Tensor<B, 2> {
+    assert!(dim == 0 || dim == 1, "Incompatible dimension requested");
+
+    let max_x = x.clone().max_dim(dim);
+    (x - max_x.clone()).exp().sum_dim(dim).log() + max_x
 }
 
 /// Compute the average cross entropy loss between predictions and desired outputs.
@@ -429,8 +432,13 @@ fn logsumexp(_x: Tensor<B, 2>) -> Tensor<B, 1> {
 ///
 /// Output:
 ///     Tensor<B, 1> - scalar average cross entropy loss
-pub fn cross_entropy_loss(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> Tensor<B, 1> {
-    todo!();
+pub fn cross_entropy_loss(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> Tensor<B, 1> {
+    let k = y.dims()[0];
+    let true_class_indexes = y.reshape([k, 1]);
+    // prediction at what should be the true class
+    let predictions = y_pred.clone().gather(1, true_class_indexes);
+
+    (logsumexp(y_pred, 1) - predictions).mean()
 }
 
 /// Compute the average error between predictions and desired outputs, assuming
@@ -442,8 +450,17 @@ pub fn cross_entropy_loss(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> Tenso
 ///
 /// Output:
 ///     f64 - average error rate
-pub fn error_rate(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> f64 {
-    todo!();
+pub fn error_rate(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> f64 {
+    let k = y.dims()[0];
+    let accuracy = y_pred
+        .argmax(1)
+        .reshape([k])
+        .equal(y)
+        .float()
+        .mean()
+        .into_scalar();
+
+    1.0 - accuracy
 }
 
 /*
