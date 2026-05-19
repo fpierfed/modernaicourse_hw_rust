@@ -66,7 +66,8 @@ use std::rc::Rc;
 
 use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
-use burn::tensor::{s, Int, Tensor};
+use burn::tensor::backend::BackendTypes;
+use burn::tensor::{Int, Tensor};
 
 pub type B = Autodiff<NdArray<f64>>;
 
@@ -487,12 +488,34 @@ pub fn error_rate(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> f64 {
 /// Output:
 ///     Tensor<B, 2> of shape (k x n) - trained linear classifier weights
 pub fn train_sgd(
-    _x: Tensor<B, 2>,
-    _y: Tensor<B, 1, Int>,
-    _n_classes: usize,
-    _epochs: usize,
-    _step_size: f64,
-    _batch_size: usize,
+    x: Tensor<B, 2>,
+    y: Tensor<B, 1, Int>,
+    n_classes: usize,
+    epochs: usize,
+    step_size: f64,
+    batch_size: usize,
 ) -> Tensor<B, 2> {
-    todo!()
+    let device = <Autodiff<NdArray<f64>> as BackendTypes>::Device::default();
+
+    let [_, n] = x.dims();
+    let mut w = Tensor::<B, 2>::zeros([n_classes, n], &device).require_grad();
+
+    let x_batches = x.split(batch_size, 0);
+    let y_batches = y.split(batch_size, 0);
+    for _ in 0..epochs {
+        for i in 0..x_batches.len() {
+            let loss = cross_entropy_loss(
+                x_batches[i].clone().matmul(w.clone().transpose()),
+                y_batches[i].clone(),
+            );
+            let mut grads = loss.backward();
+            let grad_w = w
+                .grad_remove(&mut grads)
+                .expect("It should have a gradient!");
+
+            let updated_w = w.clone().inner() - grad_w.mul_scalar(step_size);
+            w = Tensor::from_inner(updated_w).require_grad();
+        }
+    }
+    w
 }
