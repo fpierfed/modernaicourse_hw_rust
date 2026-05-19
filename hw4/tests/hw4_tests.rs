@@ -562,3 +562,160 @@ fn test_eval_llama3() {
         "KV cache inconsistency in eval_llama3: max_diff={max_diff}"
     );
 }
+
+// --- Additional value-verification and edge case tests ---
+
+#[test]
+fn test_linear_output_nonzero() {
+    let layer = Linear::new(4, 3, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1.0f32, 0.0, 0.0, 0.0], [1, 4]),
+        &DEVICE,
+    );
+    let out = layer.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
+    assert!(vals.iter().any(|&v| v != 0.0), "Linear output should be nonzero for nonzero input");
+}
+
+#[test]
+fn test_embedding_lookup_consistency() {
+    let layer = Embedding::new(10, 4, &DEVICE);
+    let idx1: Tensor<B, 2, Int> = Tensor::from_data(TensorData::new(vec![3i32], [1, 1]), &DEVICE);
+    let idx2: Tensor<B, 2, Int> = Tensor::from_data(TensorData::new(vec![3i32, 3], [1, 2]), &DEVICE);
+
+    let out1: Vec<f32> = layer.forward(idx1).reshape([4]).into_data().to_vec::<f32>().unwrap();
+    let out2_full: Vec<f32> = layer.forward(idx2).reshape([8]).into_data().to_vec::<f32>().unwrap();
+    let out2_first = &out2_full[0..4];
+    let out2_second = &out2_full[4..8];
+
+    // Same index should give same embedding
+    assert_eq!(out1, out2_first);
+    assert_eq!(out1, out2_second);
+}
+
+#[test]
+fn test_silu_properties() {
+    // silu(0) = 0
+    let zero: Tensor<B, 1> = Tensor::from_data(TensorData::new(vec![0.0f32], [1]), &DEVICE);
+    let out_zero: f32 = silu(zero).into_data().to_vec::<f32>().unwrap()[0];
+    assert!(out_zero.abs() < 1e-7, "silu(0) should be 0");
+
+    // silu(x) > 0 for x > 0
+    let pos: Tensor<B, 1> = Tensor::from_data(TensorData::new(vec![1.0f32, 2.0, 5.0], [3]), &DEVICE);
+    let out_pos: Vec<f32> = silu(pos).into_data().to_vec::<f32>().unwrap();
+    for v in &out_pos {
+        assert!(*v > 0.0, "silu(x) should be positive for x>0, got {v}");
+    }
+
+    // silu(x) < 0 for x < -1 (approximately)
+    let neg: Tensor<B, 1> = Tensor::from_data(TensorData::new(vec![-5.0f32], [1]), &DEVICE);
+    let out_neg: f32 = silu(neg).into_data().to_vec::<f32>().unwrap()[0];
+    assert!(out_neg < 0.0, "silu(x) should be negative for very negative x, got {out_neg}");
+}
+
+#[test]
+fn test_rmsnorm_unit_rms() {
+    // After RMSNorm (with weight=1), the RMS of the output should be approximately 1
+    let layer = RMSNorm::new(8, 1e-5, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0], [1, 8]),
+        &DEVICE,
+    );
+    let out = layer.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
+    let rms: f32 = (vals.iter().map(|v| v * v).sum::<f32>() / vals.len() as f32).sqrt();
+    assert!(
+        (rms - 1.0).abs() < 1e-3,
+        "RMSNorm output should have RMS ≈ 1.0, got {rms}"
+    );
+}
+
+#[test]
+fn test_rmsnorm_zero_input() {
+    let layer = RMSNorm::new(4, 1e-5, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![0.0f32; 4], [1, 4]),
+        &DEVICE,
+    );
+    let out = layer.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
+    for v in &vals {
+        assert!(v.is_finite(), "RMSNorm should handle zero input without NaN");
+    }
+}
+
+#[test]
+fn test_self_attention_output_is_weighted_v() {
+    // With no mask and identity-like Q=K, attention weights should be uniform
+    // So output ≈ mean of V rows
+    let n = 3;
+    let d = 4;
+    // Q = K = zeros → all attention weights equal after softmax
+    let q: Tensor<B, 2> = Tensor::from_data(TensorData::new(vec![0.0f32; n * d], [n, d]), &DEVICE);
+    let k: Tensor<B, 2> = Tensor::from_data(TensorData::new(vec![0.0f32; n * d], [n, d]), &DEVICE);
+    let v: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0], [3, 4]),
+        &DEVICE,
+    );
+    let out = self_attention(q, k, v, None);
+    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
+    // Each output row should be mean of all V rows = [1/3, 1/3, 1/3, 0]
+    for row in 0..3 {
+        for col in 0..3 {
+            assert!(
+                (vals[row * 4 + col] - 1.0 / 3.0).abs() < 1e-5,
+                "Uniform attention should produce mean of V: row={row}, col={col}, val={}",
+                vals[row * 4 + col]
+            );
+        }
+        assert!(vals[row * 4 + 3].abs() < 1e-5);
+    }
+}
+
+#[test]
+fn test_gated_mlp_output_nonzero() {
+    let mlp = GatedMLP::new(8, 16, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1.0f32; 8], [1, 8]),
+        &DEVICE,
+    );
+    let out = mlp.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
+    assert!(vals.iter().any(|&v| v != 0.0), "GatedMLP should produce nonzero output for nonzero input");
+}
+
+#[test]
+fn test_transformer_block_output_finite() {
+    let mut block = TransformerBlock::new(8, 2, 16, 10, &DEVICE);
+    let x: Tensor<B, 3> = Tensor::random([1, 4, 8], Distribution::Normal(0.0, 0.1), &DEVICE);
+    let mask = causal_mask(4);
+    let out = block.forward(x.clone(), Some(mask), 0, false);
+    let vals: Vec<f32> = out.reshape([32]).into_data().to_vec::<f32>().unwrap();
+    for v in &vals {
+        assert!(v.is_finite(), "TransformerBlock output must be finite");
+    }
+    // Residual: output should differ from input (unless all weights are zero)
+    let x_vals: Vec<f32> = x.reshape([32]).into_data().to_vec::<f32>().unwrap();
+    let differs = vals.iter().zip(x_vals.iter()).any(|(a, b)| (a - b).abs() > 1e-7);
+    assert!(differs, "TransformerBlock output should differ from input due to attention+MLP");
+}
+
+#[test]
+fn test_generate_stops_at_stop_token() {
+    let stop_token = 5i32;
+    let mut call = 0;
+    let mut model_fn = |tokens: Tensor<B, 2, Int>, _: usize, _: bool| -> Tensor<B, 3> {
+        let seq_len = tokens.dims()[1];
+        let vocab = 8;
+        let mut data = vec![f32::NEG_INFINITY; seq_len * vocab];
+        // Always predict token 5 (stop token)
+        data[(seq_len - 1) * vocab + stop_token as usize] = 0.0;
+        call += 1;
+        Tensor::<B, 3>::from_data(TensorData::new(data, [1, seq_len, vocab]), &DEVICE)
+    };
+    let decode_fn = |_: &[i32]| -> String { String::new() };
+    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, &[stop_token], 0.5, 100, false);
+    // Should stop after generating one token (the stop token)
+    assert_eq!(generated.len(), 1);
+    assert_eq!(generated[0], stop_token);
+}

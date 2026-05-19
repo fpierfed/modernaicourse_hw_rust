@@ -356,3 +356,130 @@ fn test_eval_reasoning_model() {
         "eval_reasoning_model KV cache mismatch: max_diff={max_diff}"
     );
 }
+
+// --- Additional edge case and value-verification tests ---
+
+#[test]
+fn test_eval_tool_complex_expressions() {
+    assert_eq!(eval_tool("(2+3)*4"), "20");
+    assert_eq!(eval_tool("100/4"), "25");
+    assert_eq!(eval_tool("3+4*2"), "11");
+    assert_eq!(eval_tool("(1+1)*(2+2)"), "8");
+}
+
+#[test]
+fn test_eval_tool_floating_near_integer() {
+    // 7.99999 should NOT round to 8 (not within 1e-4)
+    assert_eq!(eval_tool("7.99999"), "7.99999");
+    // But 8.00001 should round to 8
+    assert_eq!(eval_tool("8.00001"), "8");
+}
+
+#[test]
+fn test_eval_tool_invalid_syntax() {
+    assert_eq!(eval_tool(""), "ERROR");
+    assert_eq!(eval_tool("abc"), "ERROR");
+    assert_eq!(eval_tool("1++2"), "ERROR");
+}
+
+#[test]
+fn test_extract_answer_multiple_tags() {
+    // Should extract from the last (or first) <ANSWER> tag
+    let text = "<ANSWER>5</ANSWER> then <ANSWER>10</ANSWER>";
+    let result = extract_answer(text);
+    // Either 5 or 10 is acceptable depending on implementation
+    assert!(result == Some(5) || result == Some(10));
+}
+
+#[test]
+fn test_extract_answer_negative() {
+    assert_eq!(extract_answer("<ANSWER>-42</ANSWER>"), Some(-42));
+}
+
+#[test]
+fn test_extract_answer_whitespace() {
+    // Should handle whitespace around the number
+    assert_eq!(extract_answer("<ANSWER> 7 </ANSWER>"), Some(7));
+}
+
+#[test]
+fn test_grade_responses_all_correct() {
+    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
+        TensorData::new(vec![0i32; 6], [2, 3]),
+        &DEVICE,
+    );
+    let decode_fn = |_: &[u32]| -> String { "<ANSWER>42</ANSWER>".to_string() };
+    let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
+    // Both completions are correct and formatted
+    for s in &scores {
+        assert!(*s >= 1.5 - 1e-6, "Correct + formatted should score >= 1.5, got {s}");
+    }
+}
+
+#[test]
+fn test_grade_responses_all_wrong() {
+    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
+        TensorData::new(vec![0i32; 6], [2, 3]),
+        &DEVICE,
+    );
+    let decode_fn = |_: &[u32]| -> String { "<ANSWER>99</ANSWER>".to_string() };
+    let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
+    // Wrong answer but formatted
+    for s in &scores {
+        assert!((*s - 0.5).abs() < 1e-6, "Wrong but formatted should score 0.5, got {s}");
+    }
+}
+
+#[test]
+fn test_grade_responses_no_answer_tag() {
+    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
+        TensorData::new(vec![0i32; 3], [1, 3]),
+        &DEVICE,
+    );
+    let decode_fn = |_: &[u32]| -> String { "no answer here".to_string() };
+    let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
+    assert!((scores[0] - 0.0).abs() < 1e-6, "No answer tag should score 0, got {}", scores[0]);
+}
+
+#[test]
+fn test_convert_gsm8k_multiple_tools() {
+    let result = convert_gsm8k_to_format(
+        "What is (2+3)*4?",
+        "First <<2+3=5>>. Then <<5*4=20>>.\n#### 20",
+    );
+    assert!(result.contains("<TOOL>2+3</TOOL>"));
+    assert!(result.contains("<RESPONSE>5</RESPONSE>"));
+    assert!(result.contains("<TOOL>5*4</TOOL>"));
+    assert!(result.contains("<RESPONSE>20</RESPONSE>"));
+    assert!(result.contains("<ANSWER>20</ANSWER>"));
+}
+
+#[test]
+fn test_get_loss_mask_consecutive_tools() {
+    let specials = special_tokens();
+    // <THINK> text <TOOL>x</TOOL><RESPONSE>y</RESPONSE><TOOL>z</TOOL><RESPONSE>w</RESPONSE> </THINK><ANSWER>a</ANSWER>
+    let tokens: Vec<u32> = vec![93, 1, 95, 2, 96, 97, 3, 98, 95, 4, 96, 97, 5, 98, 94, 99, 6, 100];
+    let mask = get_loss_mask(&tokens, &specials);
+    // After <THINK>: true
+    assert!(mask[1]);  // 1 (after THINK)
+    assert!(mask[2]);  // <TOOL>
+    assert!(mask[3]);  // 2
+    assert!(mask[4]);  // </TOOL>
+    // After </TOOL>: false (tool response)
+    assert!(!mask[5]); // <RESPONSE>
+    assert!(!mask[6]); // 3
+    assert!(!mask[7]); // </RESPONSE>
+    // After </RESPONSE>: true again
+    assert!(mask[8]);  // <TOOL>
+    assert!(mask[9]);  // 4
+    assert!(mask[10]); // </TOOL>
+    // After second </TOOL>: false
+    assert!(!mask[11]); // <RESPONSE>
+    assert!(!mask[12]); // 5
+    assert!(!mask[13]); // </RESPONSE>
+    // After </RESPONSE>: true
+    assert!(mask[14]); // </THINK>
+    assert!(mask[15]); // <ANSWER>
+    assert!(mask[16]); // 6
+    assert!(mask[17]); // </ANSWER>
+}

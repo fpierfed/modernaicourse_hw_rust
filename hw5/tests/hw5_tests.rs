@@ -782,3 +782,133 @@ fn test_eval_llm() {
         assert!(v.is_finite(), "eval_llm has non-finite logits");
     }
 }
+
+// --- Additional edge case and value-verification tests ---
+
+#[test]
+fn test_bpe_encode_decode_roundtrip() {
+    let text = "hello world hello";
+    let (tokens, merges) = train_bpe(text, 260);
+    let encoded = bpe_encode(text, &merges, &tokens);
+    let decoded = bpe_decode(&encoded, &tokens);
+    assert_eq!(decoded, text, "BPE encode/decode should roundtrip");
+}
+
+#[test]
+fn test_bpe_encode_single_char() {
+    let tokens: HashMap<String, u32> = [("a".to_string(), 97)].into_iter().collect();
+    let merges: Vec<(String, String)> = vec![];
+    assert_eq!(bpe_encode("a", &merges, &tokens), vec![97]);
+}
+
+#[test]
+fn test_text_to_corpus_empty() {
+    let (corpus, counts) = text_to_corpus("");
+    assert!(corpus.is_empty() || counts.iter().all(|&c| c == 0));
+}
+
+#[test]
+fn test_most_common_pair_tie_breaking() {
+    // When there's a tie, function should still return a valid pair
+    let corpus = vec![
+        vec!["a".to_string(), "b".to_string()],
+        vec!["c".to_string(), "d".to_string()],
+    ];
+    let counts = vec![1, 1];
+    let pair = most_common_pair(&corpus, &counts);
+    // Either (a,b) or (c,d) is valid
+    assert!(
+        pair == ("a".to_string(), "b".to_string()) || pair == ("c".to_string(), "d".to_string()),
+        "Should return one of the tied pairs"
+    );
+}
+
+#[test]
+fn test_linear_kaiming_std_various_sizes() {
+    for in_f in [16, 64, 256] {
+        let layer = Linear::new(in_f, 100, &DEVICE);
+        let w = layer.weight().clone();
+        let mean: f32 = w.clone().mean().into_scalar();
+        let var: f32 = (w - mean).powf_scalar(2.0).mean().into_scalar();
+        let std = (var as f64).sqrt();
+        let expected_std = (2.0 / in_f as f64).sqrt();
+        assert!(
+            (std - expected_std).abs() < 0.05,
+            "Kaiming init failed for in_f={in_f}: std={std}, expected={expected_std}"
+        );
+    }
+}
+
+#[test]
+fn test_silu_matches_formula() {
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![-2.0f32, -1.0, 0.0, 1.0, 2.0, 3.0], [2, 3]),
+        &DEVICE,
+    );
+    let out = silu(x.clone());
+    // silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
+    let sigmoid = (x.clone().neg().exp() + 1.0).powf_scalar(-1.0);
+    let expected = x * sigmoid;
+    let diff: f32 = (out - expected).abs().sum().into_scalar();
+    assert!(diff < 1e-5, "silu should match x*sigmoid(x), diff={diff}");
+}
+
+#[test]
+fn test_rms_norm_preserves_direction() {
+    // RMS norm should only change magnitude, not direction (sign pattern)
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1.0f32, -2.0, 3.0, -4.0], [1, 4]),
+        &DEVICE,
+    );
+    let out = rms_norm(x.clone(), 1e-5);
+    let x_vals: Vec<f32> = x.into_data().to_vec().unwrap();
+    let out_vals: Vec<f32> = out.into_data().to_vec().unwrap();
+    for i in 0..4 {
+        assert_eq!(
+            x_vals[i].signum(),
+            out_vals[i].signum(),
+            "rms_norm should preserve sign at index {i}"
+        );
+    }
+}
+
+#[test]
+fn test_cross_entropy_loss_hw5_stable() {
+    let logits: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![1000.0f32, 1001.0, 999.0, 0.0, 0.0, 0.0], [2, 3]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 0]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
+    assert!(loss.is_finite(), "cross_entropy_loss must be stable for large logits");
+    assert!(loss >= 0.0);
+}
+
+#[test]
+fn test_adam_converges_faster_than_random() {
+    // After a few Adam steps, loss should decrease
+    let layer = Linear::new(4, 3, &DEVICE);
+    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+    let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8);
+
+    let x: Tensor<B, 2> = Tensor::random([8, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let y: Tensor<B, 1, Int> = Tensor::from_data(
+        TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1]),
+        &DEVICE,
+    );
+
+    let logits = layer.forward(x.clone());
+    let loss_before: f32 = cross_entropy_loss(logits, y.clone()).into_scalar();
+
+    // Train for 10 steps
+    for _ in 0..10 {
+        let logits = layer.forward(x.clone());
+        let loss = cross_entropy_loss(logits, y.clone());
+        let grads = loss.backward();
+        opt.step(&grads);
+    }
+
+    let logits = layer.forward(x);
+    let loss_after: f32 = cross_entropy_loss(logits, y).into_scalar();
+    assert!(loss_after < loss_before, "Adam should reduce loss: before={loss_before}, after={loss_after}");
+}

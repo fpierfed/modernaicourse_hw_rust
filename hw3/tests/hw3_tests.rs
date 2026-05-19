@@ -521,3 +521,161 @@ fn test_eval_two_layer_nn() {
         "Two-layer NN error {err:.4} is not < 0.03 on first 2000 MNIST test samples"
     );
 }
+
+// --- Additional edge case and value-verification tests ---
+
+#[test]
+fn test_cross_entropy_loss_single_sample() {
+    let logits: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 2.0, 3.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([2i32]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
+    assert!(loss.is_finite());
+    assert!((loss - 0.4076).abs() < 1e-3, "Single sample loss incorrect: {loss}");
+}
+
+#[test]
+fn test_cross_entropy_loss_perfect_prediction() {
+    let logits: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[100.0f32, 0.0, 0.0], [0.0, 100.0, 0.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
+    assert!(loss.is_finite());
+    assert!(loss < 1e-5, "Perfect prediction should give near-zero loss, got {loss}");
+}
+
+#[test]
+fn test_cross_entropy_loss_large_logits_stable() {
+    let logits: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1e30f32, 0.0], [0.0, 1e30]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
+    assert!(loss.is_finite(), "Should handle very large logits without overflow");
+    assert!(loss < 1e-5);
+}
+
+#[test]
+fn test_linear_output_nonzero() {
+    let layer = Linear::new(4, 3, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]),
+        &DEVICE,
+    );
+    let out = layer.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec().unwrap();
+    assert!(vals.iter().any(|&v| v != 0.0), "Linear output should not be all zeros for nonzero input");
+}
+
+#[test]
+fn test_sgd_moves_in_gradient_direction() {
+    let layer = Linear::new(4, 3, &DEVICE);
+    let _w_before: Vec<f32> = layer.weight().clone().into_data().to_vec().unwrap();
+
+    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+    let mut opt = SGD::new(params, 0.1);
+
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32]), &DEVICE);
+
+    let logits = layer.forward(x);
+    let loss = cross_entropy_loss(logits, y);
+    let loss_val: f32 = loss.clone().into_scalar();
+    let grads = loss.backward();
+    opt.step(&grads);
+
+    // After one step, loss should decrease on the same input
+    let x2: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]),
+        &DEVICE,
+    );
+    let y2: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32]), &DEVICE);
+    let logits2 = layer.forward(x2);
+    let loss2: f32 = cross_entropy_loss(logits2, y2).into_scalar();
+    assert!(loss2 < loss_val, "Loss should decrease after SGD step: before={loss_val}, after={loss2}");
+}
+
+#[test]
+fn test_dataloader_single_sample() {
+    let x: Tensor<B, 2> = Tensor::from_data(TensorData::from([[1.0f32, 2.0]]), &DEVICE);
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32]), &DEVICE);
+
+    let loader = DataLoader::new(x, y, 10);
+    let batches: Vec<_> = loader.collect();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].0.dims()[0], 1);
+}
+
+#[test]
+fn test_dataloader_batch_equals_dataset() {
+    let x: Tensor<B, 2> = Tensor::arange(0..8, &DEVICE).float().reshape([4, 2]);
+    let y: Tensor<B, 1, Int> = Tensor::arange(0..4, &DEVICE);
+
+    let loader = DataLoader::new(x, y, 4);
+    let batches: Vec<_> = loader.collect();
+    assert_eq!(batches.len(), 1);
+    assert_eq!(batches[0].0.dims()[0], 4);
+}
+
+#[test]
+fn test_epoch_loss_decreases_with_training() {
+    let layer = Linear::new(4, 3, &DEVICE);
+
+    let x: Tensor<B, 2> = Tensor::random([20, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let y: Tensor<B, 1, Int> = Tensor::from_data(
+        TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1]),
+        &DEVICE,
+    );
+
+    let loader: Vec<(Tensor<B, 2>, Tensor<B, 1, Int>)> = vec![
+        (x.clone().narrow(0, 0, 10), y.clone().narrow(0, 0, 10)),
+        (x.narrow(0, 10, 10), y.narrow(0, 10, 10)),
+    ];
+
+    let model_fn = |input: Tensor<B, 2>| -> Tensor<B, 2> { layer.forward(input) };
+
+    let (loss_before, _) = epoch(&model_fn, &loader, None);
+
+    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+    let mut opt = SGD::new(params, 0.1);
+
+    // Run several training epochs
+    for _ in 0..5 {
+        epoch(&model_fn, &loader, Some(&mut opt));
+    }
+
+    let (loss_after, _) = epoch(&model_fn, &loader, None);
+    assert!(loss_after < loss_before, "Loss should decrease after training: before={loss_before}, after={loss_after}");
+}
+
+#[test]
+fn test_two_layer_nn_output_nonzero() {
+    let model = TwoLayerNN::new(4, 8, 3, &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 0.5, -0.5, 1.0]]),
+        &DEVICE,
+    );
+    let out = model.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec().unwrap();
+    assert!(vals.iter().any(|&v| v != 0.0), "TwoLayerNN output should not be all zeros");
+}
+
+#[test]
+fn test_multi_layer_nn_output_nonzero() {
+    let model = MultiLayerNN::new(4, 3, &[8, 6], &DEVICE);
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, -1.0, 0.5, -0.5]]),
+        &DEVICE,
+    );
+    let out = model.forward(x);
+    let vals: Vec<f32> = out.into_data().to_vec().unwrap();
+    assert!(vals.iter().any(|&v| v != 0.0), "MultiLayerNN output should not be all zeros");
+}

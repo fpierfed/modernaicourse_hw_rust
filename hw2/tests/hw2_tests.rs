@@ -347,3 +347,125 @@ fn test_train_sgd_fifteen_epochs() {
     let norm: f32 = w_data.iter().map(|&wij| wij * wij).sum::<f32>().sqrt();
     assert!(norm > EPS as f32, "trained weights should not stay at zero");
 }
+
+// --- Additional edge case and quality tests ---
+
+#[test]
+fn test_cross_entropy_loss_single_sample() {
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 2.0, 3.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([2i32]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(y_pred, y).into_scalar();
+    // -3.0 + log(exp(1)+exp(2)+exp(3)) = -3 + log(e + e^2 + e^3) ≈ -3 + 3.4076 = 0.4076
+    assert!(loss.is_finite());
+    assert!((loss - 0.4076).abs() < 1e-3);
+}
+
+#[test]
+fn test_cross_entropy_loss_perfect_prediction() {
+    // When logits strongly favor the correct class, loss should be near zero
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[100.0f32, 0.0, 0.0], [0.0, 100.0, 0.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(y_pred, y).into_scalar();
+    assert!(loss.is_finite());
+    assert!(loss < 1e-5, "Loss should be near zero for perfect predictions, got {loss}");
+}
+
+#[test]
+fn test_cross_entropy_loss_numerically_stable() {
+    // Very large logits should not produce NaN or Inf
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1000.0f32, 1001.0, 999.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(y_pred, y).into_scalar();
+    assert!(loss.is_finite(), "Loss must be finite for large logits");
+    assert!(loss >= 0.0, "Cross-entropy loss must be non-negative");
+}
+
+#[test]
+fn test_error_rate_perfect() {
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[10.0f32, 0.0], [0.0, 10.0], [0.0, 10.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1, 1]), &DEVICE);
+    let err = error_rate(y_pred, y);
+    assert!((err - 0.0).abs() < 1e-6, "Perfect predictions should give 0 error");
+}
+
+#[test]
+fn test_error_rate_all_wrong() {
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[0.0f32, 10.0], [10.0, 0.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
+    let err = error_rate(y_pred, y);
+    assert!((err - 1.0).abs() < 1e-6, "All wrong predictions should give 1.0 error");
+}
+
+#[test]
+fn test_train_sgd_zero_epochs() {
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 2.0], [3.0, 4.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
+    let w = train_sgd(x, y, 2, 0, 0.1, 2);
+    // With 0 epochs, weights should remain at initialization (zeros)
+    let w_data: Vec<f32> = w.into_data().to_vec().unwrap();
+    for &val in &w_data {
+        assert!((val - 0.0).abs() < 1e-7, "0 epochs should return zero-initialized weights");
+    }
+}
+
+#[test]
+fn test_train_sgd_batch_size_one() {
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0], [1.0, 2.0], [-2.0, -1.0], [-1.0, -2.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 1, 0, 0]), &DEVICE);
+    let w = train_sgd(x, y, 2, 10, 0.1, 1);
+    assert_eq!(w.dims(), [2, 2]);
+    let w_data: Vec<f32> = w.into_data().to_vec().unwrap();
+    assert!(w_data.iter().any(|&v| v.abs() > 1e-6), "Weights should be non-zero after training");
+}
+
+#[test]
+fn test_train_sgd_loss_decreases() {
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0], [1.0, 2.0], [-2.0, -1.0], [-1.0, -2.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 1, 0, 0]), &DEVICE);
+
+    let w1 = train_sgd(x.clone(), y.clone(), 2, 1, 0.1, 2);
+    let w20 = train_sgd(x.clone(), y.clone(), 2, 20, 0.1, 2);
+
+    // Compute predictions and loss for both
+    let w1_data: Vec<f32> = w1.into_data().to_vec().unwrap();
+    let w20_data: Vec<f32> = w20.into_data().to_vec().unwrap();
+    let x_data: Vec<f32> = x.into_data().to_vec().unwrap();
+
+    // Compute sum of correct predictions for w20 (should be better than w1)
+    let mut correct_w1 = 0;
+    let mut correct_w20 = 0;
+    let y_data: Vec<i32> = y.into_data().to_vec().unwrap();
+    for i in 0..4 {
+        let s1: Vec<f32> = (0..2).map(|k| (0..2).map(|j| w1_data[k*2+j] * x_data[i*2+j]).sum()).collect();
+        let s20: Vec<f32> = (0..2).map(|k| (0..2).map(|j| w20_data[k*2+j] * x_data[i*2+j]).sum()).collect();
+        let p1 = s1.iter().enumerate().max_by(|a,b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        let p20 = s20.iter().enumerate().max_by(|a,b| a.1.partial_cmp(b.1).unwrap()).unwrap().0;
+        if p1 == y_data[i] as usize { correct_w1 += 1; }
+        if p20 == y_data[i] as usize { correct_w20 += 1; }
+    }
+    assert!(correct_w20 >= correct_w1, "More epochs should improve accuracy: w1={correct_w1}, w20={correct_w20}");
+}

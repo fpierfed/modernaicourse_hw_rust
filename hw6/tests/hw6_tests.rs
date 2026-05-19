@@ -1,5 +1,5 @@
 use burn::backend::ndarray::NdArrayDevice;
-use burn::tensor::{Int, Tensor, TensorData};
+use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use hw6::*;
 
 #[allow(unused)]
@@ -396,4 +396,83 @@ fn test_eval_llm_dpo() {
         max_diff < 3e-4,
         "eval_llm_dpo KV cache mismatch: max_diff={max_diff}"
     );
+}
+
+// --- Additional edge case and value-verification tests ---
+
+#[test]
+fn test_messages_to_chat_format_empty() {
+    let messages: Vec<(String, String)> = vec![];
+    let result = messages_to_chat_format(&messages);
+    assert_eq!(result, "");
+}
+
+#[test]
+fn test_messages_to_chat_format_single_user() {
+    let messages = vec![("user".to_string(), "hello".to_string())];
+    let result = messages_to_chat_format(&messages);
+    assert!(result.contains("<USER>hello</USER>"));
+    assert!(!result.contains("<ASSISTANT>"));
+}
+
+#[test]
+fn test_get_loss_mask_empty_assistant() {
+    // <USER>hi</USER><ASSISTANT></ASSISTANT> → mask true only between ASSISTANT tags
+    let assistant_start = 100u32;
+    let assistant_end = 101u32;
+    let tokens = vec![50, 51, 52, assistant_start, assistant_end, 53];
+    let mask = get_loss_mask(&tokens, assistant_start, assistant_end);
+    // Only the token at index 4 (assistant_end) should be true
+    assert!(!mask[0]);
+    assert!(!mask[1]);
+    assert!(!mask[2]);
+    assert!(!mask[3]); // assistant_start itself
+    assert!(mask[4]);  // assistant_end (included)
+    assert!(!mask[5]);
+}
+
+#[test]
+fn test_softplus_large_negative() {
+    // softplus(x, beta) ≈ 0 for very negative x
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([-100.0f32]), &DEVICE);
+    let out: f32 = softplus(x, 1.0).into_scalar();
+    assert!(out.is_finite());
+    assert!(out.abs() < 1e-5, "softplus(-100) should be ≈ 0, got {out}");
+}
+
+#[test]
+fn test_softplus_large_positive() {
+    // softplus(x, beta) ≈ beta*x for very positive x
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([100.0f32]), &DEVICE);
+    let beta = 0.5;
+    let out: f32 = softplus(x, beta).into_scalar();
+    assert!(out.is_finite());
+    assert!((out - 50.0).abs() < 1e-3, "softplus(100, 0.5) should be ≈ 50, got {out}");
+}
+
+#[test]
+fn test_softplus_at_zero() {
+    // softplus(0, 1) = log(1 + exp(0)) = log(2) ≈ 0.6931
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([0.0f32]), &DEVICE);
+    let out: f32 = softplus(x, 1.0).into_scalar();
+    assert!((out - std::f32::consts::LN_2).abs() < 1e-3, "softplus(0, 1) should be ln(2), got {out}");
+}
+
+#[test]
+fn test_log_probs_all_masked() {
+    // If mask is all zeros, log_probs should be 0 for each batch element
+    let logits: Tensor<B, 3> = Tensor::random([2, 3, 5], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let y: Tensor<B, 2, Int> = Tensor::from_data(
+        TensorData::new(vec![0i32, 1, 2, 3, 4, 0], [2, 3]),
+        &DEVICE,
+    );
+    let mask: Tensor<B, 2> = Tensor::from_data(
+        TensorData::new(vec![0.0f32; 6], [2, 3]),
+        &DEVICE,
+    );
+    let lp = log_probs(logits, y, mask);
+    let vals: Vec<f32> = lp.into_data().to_vec().unwrap();
+    for v in &vals {
+        assert!(v.abs() < 1e-6, "All-masked log_probs should be 0, got {v}");
+    }
 }
