@@ -14,7 +14,7 @@
  * ### Question 1 - Linear layer
  *
  * Key points about implementing a linear layer:
- * - Store the weights as a Parameter of shape (out_dim, in_dim)
+ * - Store the weights as a Tensor of shape (out_dim, in_dim)
  * - Initialize with sqrt(2/in_dim) scaling of random Gaussian weights (Kaiming init)
  * - The forward call takes a batch of examples (batch_size x in_dim) and returns
  *   (batch_size x out_dim)
@@ -28,9 +28,8 @@
  * ### Question 3 - Stochastic Gradient Descent
  *
  * In the standard optimizer paradigm:
- *   opt.zero_grad()   // zeros out all .grad variables
- *   loss.backward()   // computes gradients via autograd
- *   opt.step()        // modifies parameters: w = w - lr * w.grad
+ *   let grads = loss.backward();
+ *   opt.step(&grads);
  *
  * ### Question 4 - Data Loader
  *
@@ -61,11 +60,19 @@
  *   h(x) = W_L * relu(W_{L-1} * relu(... W_2 * relu(W_1 * x) ...))
  *
  * Initialized with input dim, output dim, and a list of hidden dimensions.
- * Store all Linear layers in a single Vec/ModuleList called .linears.
+ * Store all Linear layers in a single Vec called .linears.
  */
 
-use candle_core::{Device, Result, Tensor};
-use candle_nn::VarMap;
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+use burn::tensor::backend::AutodiffBackend;
+use burn::tensor::{Int, Tensor};
+
+#[allow(unused_imports)]
+use burn::tensor::{Distribution, TensorData};
+
+pub type B = Autodiff<NdArray<f32>>;
+pub type Device = NdArrayDevice;
 
 /// Linear layer (no bias) with Kaiming initialization.
 ///
@@ -81,20 +88,15 @@ pub struct Linear {
 }
 
 impl Linear {
-    pub fn new(
-        in_features: usize,
-        out_features: usize,
-        varmap: &VarMap,
-        name: &str,
-    ) -> Result<Self> {
+    pub fn new(_in_features: usize, _out_features: usize, _device: &Device) -> Self {
         todo!()
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B, 2> {
         todo!()
     }
 }
@@ -106,7 +108,7 @@ impl Linear {
 ///     targets: (N) desired class for each example
 /// Output:
 ///     scalar tensor - average cross entropy loss
-pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
+pub fn cross_entropy_loss(_logits: Tensor<B, 2>, _targets: Tensor<B, 1, Int>) -> Tensor<B, 1> {
     todo!()
 }
 
@@ -114,21 +116,16 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
 ///
 /// Initialize over a set of model parameters with a given learning rate.
 /// step() applies: w = w - lr * w.grad
-/// zero_grad() zeros out gradients for all stored parameters.
 pub struct SGD {
     // TODO: learning rate, parameter references
 }
 
 impl SGD {
-    pub fn new(_params: Vec<Tensor>, _lr: f64) -> Self {
+    pub fn new(_params: Vec<Tensor<B, 2>>, _lr: f64) -> Self {
         todo!()
     }
 
-    pub fn step(&mut self) -> Result<()> {
-        todo!()
-    }
-
-    pub fn zero_grad(&mut self) -> Result<()> {
+    pub fn step(&mut self, _grads: &<B as AutodiffBackend>::Gradients) {
         todo!()
     }
 }
@@ -143,13 +140,13 @@ pub struct DataLoader {
 }
 
 impl DataLoader {
-    pub fn new(_x: Tensor, _y: Tensor, _batch_size: usize) -> Self {
+    pub fn new(_x: Tensor<B, 2>, _y: Tensor<B, 1, Int>, _batch_size: usize) -> Self {
         todo!()
     }
 }
 
 impl Iterator for DataLoader {
-    type Item = (Tensor, Tensor);
+    type Item = (Tensor<B, 2>, Tensor<B, 1, Int>);
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
@@ -169,12 +166,12 @@ impl TwoLayerNN {
         _in_features: usize,
         _hidden_features: usize,
         _out_features: usize,
-        _varmap: &VarMap,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
 
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 }
@@ -192,12 +189,12 @@ impl MultiLayerNN {
         _in_features: usize,
         _out_features: usize,
         _hidden_dims: &[usize],
-        _varmap: &VarMap,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
 
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 }
@@ -206,12 +203,14 @@ impl MultiLayerNN {
 ///
 /// If optimizer is Some, runs training (forward + backward + step).
 /// Returns (average_loss, error_rate) as floats.
-pub fn epoch(
-    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _loader: &[(Tensor, Tensor)],
-    _loss_fn: &dyn Fn(&Tensor, &Tensor) -> Result<Tensor>,
+pub fn epoch<M>(
+    _model: &M,
+    _loader: &[(Tensor<B, 2>, Tensor<B, 1, Int>)],
     _optimizer: Option<&mut SGD>,
-) -> Result<(f64, f64)> {
+) -> (f64, f64)
+where
+    M: Fn(Tensor<B, 2>) -> Tensor<B, 2>,
+{
     todo!()
 }
 
@@ -222,7 +221,7 @@ pub fn epoch(
 /// The returned model should achieve < 10% error on the test set.
 ///
 /// Use your Linear, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_linear_model(_x_train: &Tensor, _y_train: &Tensor) -> Result<Linear> {
+pub fn eval_linear_model(_x_train: Tensor<B, 2>, _y_train: Tensor<B, 1, Int>) -> Linear {
     todo!()
 }
 
@@ -233,6 +232,6 @@ pub fn eval_linear_model(_x_train: &Tensor, _y_train: &Tensor) -> Result<Linear>
 /// The returned model should achieve < 3% error on the first 2000 test samples.
 ///
 /// Use your TwoLayerNN, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_two_layer_nn(_x_train: &Tensor, _y_train: &Tensor) -> Result<TwoLayerNN> {
+pub fn eval_two_layer_nn(_x_train: Tensor<B, 2>, _y_train: Tensor<B, 1, Int>) -> TwoLayerNN {
     todo!()
 }

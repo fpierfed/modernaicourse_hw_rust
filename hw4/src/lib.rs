@@ -59,55 +59,69 @@
  * 4. Stop at stop_tokens or max_tokens
  */
 
-use candle_core::{Result, Tensor};
-use candle_nn::VarMap;
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+#[allow(unused_imports)]
+use burn::tensor::{Int, Tensor, TensorData};
+
+pub type B = Autodiff<NdArray<f32>>;
+pub type Device = NdArrayDevice;
 
 pub struct Linear {}
 impl Linear {
-    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_in_f: usize, _out_f: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B, 2> {
         todo!()
     }
 }
 
 pub struct Embedding {}
 impl Embedding {
-    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_num_tokens: usize, _dim: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, _indices: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         todo!()
     }
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B, 2> {
         todo!()
     }
 }
 
-pub fn silu(_x: &Tensor) -> Result<Tensor> {
+pub fn silu<const D: usize>(_x: Tensor<B, D>) -> Tensor<B, D> {
     todo!()
 }
 
 pub struct RMSNorm {}
 impl RMSNorm {
-    pub fn new(_dim: usize, _eps: f64, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_dim: usize, _eps: f64, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 }
 
 pub fn self_attention(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _mask: Option<&Tensor>,
-) -> Result<Tensor> {
+    _q: Tensor<B, 2>,
+    _k: Tensor<B, 2>,
+    _v: Tensor<B, 2>,
+    _mask: Option<Tensor<B, 2>>,
+) -> Tensor<B, 2> {
+    todo!()
+}
+
+pub fn self_attention_batched(
+    _q: Tensor<B, 4>,
+    _k: Tensor<B, 4>,
+    _v: Tensor<B, 4>,
+    _mask: Option<Tensor<B, 2>>,
+) -> Tensor<B, 4> {
     todo!()
 }
 
@@ -115,32 +129,26 @@ pub struct MultiHeadAttentionKVCache {
     pub n_heads: usize,
 }
 impl MultiHeadAttentionKVCache {
-    pub fn new(
-        _dim: usize,
-        _n_heads: usize,
-        _max_cache: usize,
-        _vm: &VarMap,
-        _name: &str,
-    ) -> Result<Self> {
+    pub fn new(_dim: usize, _n_heads: usize, _max_cache: usize, _device: &Device) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: &Tensor,
-        _mask: Option<&Tensor>,
+        _x: Tensor<B, 3>,
+        _mask: Option<Tensor<B, 2>>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
 
 pub struct GatedMLP {}
 impl GatedMLP {
-    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_dim: usize, _ffn_dim: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 }
@@ -152,18 +160,17 @@ impl TransformerBlock {
         _n_heads: usize,
         _ffn_dim: usize,
         _max_seq: usize,
-        _vm: &VarMap,
-        _name: &str,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: &Tensor,
-        _mask: Option<&Tensor>,
+        _x: Tensor<B, 3>,
+        _mask: Option<Tensor<B, 2>>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
@@ -177,39 +184,34 @@ impl Llama3Simplified {
         _max_seq: usize,
         _ffn_dim: usize,
         _num_layers: usize,
-        _vm: &VarMap,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _tokens: &Tensor,
+        _tokens: Tensor<B, 2, Int>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-    _prompt_tokens: &[u32],
-    _decode_fn: &dyn Fn(&[u32]) -> String,
-    _stop_tokens: &[u32],
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
+    _prompt_tokens: &[i32],
+    _decode_fn: &dyn Fn(&[i32]) -> String,
+    _stop_tokens: &[i32],
     _temp: f64,
     _max_tokens: usize,
     _verbose: bool,
-) -> Result<Vec<u32>> {
+) -> Vec<i32> {
     todo!()
 }
 
 /// Load the Llama 3.2 simplified model with pretrained weights.
-///
-/// Downloads model weights from HuggingFace and returns a ready-to-use
-/// Llama3Simplified instance. The model should support both full forward
-/// passes and incremental KV-cached generation.
-///
-/// Returns the loaded model along with the vocab size (needed to verify output shape).
-pub fn eval_llama3() -> Result<Llama3Simplified> {
+pub fn eval_llama3() -> Llama3Simplified {
     todo!()
 }

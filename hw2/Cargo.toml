@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+burn = { workspace = true }
 ndarray = { workspace = true }
 ndarray-stats = { workspace = true }
 

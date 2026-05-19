@@ -1,8 +1,9 @@
-use candle_core::{Device, Tensor};
+use burn::backend::ndarray::NdArrayDevice;
+use burn::tensor::{Int, Tensor, TensorData};
 use hw7::*;
 use std::collections::HashMap;
 
-const DEVICE: Device = Device::Cpu;
+const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
 
 fn special_tokens() -> HashMap<String, u32> {
     let mut m = HashMap::new();
@@ -24,9 +25,16 @@ fn char_encode(text: &str) -> Vec<u32> {
 }
 
 fn char_decode(tokens: &[u32]) -> String {
-    tokens.iter().filter_map(|&t| {
-        if t == 0 { None } else { char::from_u32(t).map(|c| c.to_string()) }
-    }).collect()
+    tokens
+        .iter()
+        .filter_map(|&t| {
+            if t == 0 {
+                None
+            } else {
+                char::from_u32(t).map(|c| c.to_string())
+            }
+        })
+        .collect()
 }
 
 // ============================================================
@@ -35,38 +43,38 @@ fn char_decode(tokens: &[u32]) -> String {
 
 #[test]
 fn test_generate_parallel_basic() {
-    let next_tokens: Vec<Vec<u32>> = vec![
-        vec![3, 4, 5],  // step 0: each of 3 completions gets a different token
-        vec![6, 6, 6],  // step 1: all get eot_token=6
+    let next_tokens: Vec<Vec<i32>> = vec![
+        vec![3, 4, 5], // step 0: each of 3 completions gets a different token
+        vec![6, 6, 6], // step 1: all get eot_token=6
     ];
     let mut call_count = 0usize;
 
     let mut model_fn =
-        |tokens: &Tensor, _seq_pos: usize, _use_cache: bool| -> candle_core::Result<Tensor> {
+        |tokens: Tensor<B, 2, Int>, _seq_pos: usize, _use_cache: bool| -> Tensor<B, 3> {
             let batch = tokens.dims()[0];
             let seq_len = tokens.dims()[1];
             let vocab_size = 10;
             let mut data = vec![f32::NEG_INFINITY; batch * seq_len * vocab_size];
             let step_tokens = &next_tokens[call_count];
             for i in 0..batch {
-                data[i * seq_len * vocab_size + (seq_len - 1) * vocab_size + step_tokens[i] as usize] = 0.0;
+                data[i * seq_len * vocab_size
+                    + (seq_len - 1) * vocab_size
+                    + step_tokens[i] as usize] = 0.0;
             }
             call_count += 1;
-            Tensor::from_slice(&data, &[batch, seq_len, vocab_size], &Device::Cpu)
+            Tensor::<B, 3>::from_data(TensorData::new(data, [batch, seq_len, vocab_size]), &DEVICE)
         };
 
-    let tokens = generate_parallel(
-        &mut model_fn,
-        &[1, 2],
-        3,
-        Some(6),
-        0.7,
-        5,
-    ).unwrap();
+    let tokens = generate_parallel(&mut model_fn, &[1, 2], 3, Some(6), 0.7, 5);
 
     // Shape: (3, total_len) where total_len includes prompt + generated
     assert_eq!(tokens.dims()[0], 3);
-    let row0: Vec<u32> = tokens.get(0).unwrap().to_vec1().unwrap();
+    let row0: Vec<i32> = tokens
+        .clone()
+        .narrow(0, 0, 1)
+        .into_data()
+        .to_vec::<i32>()
+        .unwrap();
     // Row 0 should contain prompt [1,2] then generated tokens [3, 6, ...]
     assert_eq!(row0[0], 1);
     assert_eq!(row0[1], 2);
@@ -77,7 +85,7 @@ fn test_generate_parallel_basic() {
 fn test_generate_parallel_max_tokens() {
     // Never hits eot_token, should stop at max_tokens
     let mut model_fn =
-        |tokens: &Tensor, _seq_pos: usize, _use_cache: bool| -> candle_core::Result<Tensor> {
+        |tokens: Tensor<B, 2, Int>, _seq_pos: usize, _use_cache: bool| -> Tensor<B, 3> {
             let batch = tokens.dims()[0];
             let seq_len = tokens.dims()[1];
             let vocab_size = 10;
@@ -85,10 +93,10 @@ fn test_generate_parallel_max_tokens() {
             for i in 0..batch {
                 data[i * seq_len * vocab_size + (seq_len - 1) * vocab_size + 3] = 0.0;
             }
-            Tensor::from_slice(&data, &[batch, seq_len, vocab_size], &Device::Cpu)
+            Tensor::<B, 3>::from_data(TensorData::new(data, [batch, seq_len, vocab_size]), &DEVICE)
         };
 
-    let tokens = generate_parallel(&mut model_fn, &[1], 2, None, 0.7, 4).unwrap();
+    let tokens = generate_parallel(&mut model_fn, &[1], 2, None, 0.7, 4);
     // Max 4 tokens total (including prompt of 1)
     assert_eq!(tokens.dims()[0], 2);
     assert!(tokens.dims()[1] <= 4);
@@ -115,11 +123,9 @@ fn test_gsm8k_to_format() {
 
 #[test]
 fn test_gsm8k_to_format_no_tool() {
-    let result = convert_gsm8k_to_format(
-        "No tool call here?",
-        "Think carefully.\n#### 11",
-    );
-    let expected = "<QUESTION>No tool call here?</QUESTION><THINK>Think carefully.</THINK><ANSWER>11</ANSWER>";
+    let result = convert_gsm8k_to_format("No tool call here?", "Think carefully.\n#### 11");
+    let expected =
+        "<QUESTION>No tool call here?</QUESTION><THINK>Think carefully.</THINK><ANSWER>11</ANSWER>";
     assert_eq!(result, expected);
 }
 
@@ -135,7 +141,11 @@ fn test_pretokenize_gsm8k() {
     ]"#;
     std::fs::write(&in_path, input_json).unwrap();
 
-    pretokenize_gsm8k(&char_encode, in_path.to_str().unwrap(), out_path.to_str().unwrap());
+    pretokenize_gsm8k(
+        &char_encode,
+        in_path.to_str().unwrap(),
+        out_path.to_str().unwrap(),
+    );
 
     let output = std::fs::read_to_string(&out_path).unwrap();
     let tokens: Vec<Vec<u32>> = serde_json::from_str(&output).unwrap();
@@ -152,10 +162,10 @@ fn test_get_loss_mask_gsm8k() {
     let tokens: Vec<u32> = vec![91, 1, 92, 93, 2, 95, 3, 96, 97, 4, 98, 5, 94, 99, 6, 100, 7];
     let expected = vec![
         false, false, false, false, // <QUESTION>, 1, </QUESTION>, <THINK>
-        true, true, true, true,     // 2, <TOOL>, 3, </TOOL>
-        false, false, false,        // <RESPONSE>, 4, </RESPONSE>
-        true, true, true, true, true, // 5, </THINK>, <ANSWER>, 6, </ANSWER>
-        false,                       // 7 (after </ANSWER>)
+        true, true, true, true, // 2, <TOOL>, 3, </TOOL>
+        false, false, false, // <RESPONSE>, 4, </RESPONSE>
+        true, true, true, true, true,  // 5, </THINK>, <ANSWER>, 6, </ANSWER>
+        false, // 7 (after </ANSWER>)
     ];
     assert_eq!(get_loss_mask(&tokens, &specials), expected);
 }
@@ -167,8 +177,8 @@ fn test_get_loss_mask_no_tool() {
     let tokens: Vec<u32> = vec![91, 1, 92, 93, 2, 99, 3, 100, 4];
     let expected = vec![
         false, false, false, false, // <QUESTION>, 1, </QUESTION>, <THINK>
-        true, true, true, true,     // 2, <ANSWER>, 3, </ANSWER>
-        false,                      // 4
+        true, true, true, true,  // 2, <ANSWER>, 3, </ANSWER>
+        false, // 4
     ];
     assert_eq!(get_loss_mask(&tokens, &specials), expected);
 }
@@ -200,7 +210,10 @@ fn test_eval_tool_expressions() {
 fn test_extract_answer_found() {
     assert_eq!(extract_answer("blah <ANSWER>42</ANSWER> blah"), Some(42));
     assert_eq!(extract_answer("<ANSWER>3</ANSWER>"), Some(3));
-    assert_eq!(extract_answer("<THINK>x</THINK><ANSWER>-7</ANSWER>"), Some(-7));
+    assert_eq!(
+        extract_answer("<THINK>x</THINK><ANSWER>-7</ANSWER>"),
+        Some(-7)
+    );
 }
 
 #[test]
@@ -221,18 +234,27 @@ fn test_grade_responses() {
     let row2_text = "<THINK>c</THINK>";
 
     // Build token tensor
-    let r0: Vec<u32> = char_encode(row0_text);
-    let r1: Vec<u32> = char_encode(row1_text);
-    let r2: Vec<u32> = char_encode(row2_text);
+    let r0: Vec<i32> = char_encode(row0_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
+    let r1: Vec<i32> = char_encode(row1_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
+    let r2: Vec<i32> = char_encode(row2_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
     let max_len = r0.len().max(r1.len()).max(r2.len());
-    let mut data: Vec<u32> = Vec::new();
+    let mut data: Vec<i32> = Vec::new();
     for row in [&r0, &r1, &r2] {
         data.extend(row);
-        data.extend(vec![0u32; max_len - row.len()]);
+        data.extend(vec![0i32; max_len - row.len()]);
     }
-    let tokens = Tensor::from_vec(data, &[3, max_len], &DEVICE).unwrap();
+    let tokens = Tensor::<B, 2, Int>::from_data(TensorData::new(data, [3, max_len]), &DEVICE);
 
-    let scores = grade_responses(&char_decode, &tokens, 9, 1.0, 0.2);
+    let scores = grade_responses(&char_decode, tokens, 9, 1.0, 0.2);
     assert_eq!(scores.len(), 3);
     assert!((scores[0] - 1.2).abs() < 1e-6);
     assert!((scores[1] - 0.2).abs() < 1e-6);
@@ -246,38 +268,36 @@ fn test_grade_responses() {
 #[test]
 fn test_rl_loss_shape() {
     let specials = special_tokens();
-    let mask_fn = |tokens: &[u32]| -> Vec<bool> {
-        get_loss_mask(tokens, &specials)
-    };
+    let mask_fn = |tokens: &[u32]| -> Vec<bool> { get_loss_mask(tokens, &specials) };
 
     // Build tokens as if they were: <QUESTION>Q</QUESTION><THINK>a</THINK><ANSWER>5</ANSWER>
-    let row: Vec<u32> = vec![91, 81, 92, 93, 65, 94, 99, 53, 100]; // Q=81, a=65, 5=53
-    let tokens_data: Vec<u32> = row.iter().chain(row.iter()).cloned().collect();
-    let tokens = Tensor::from_vec(tokens_data, &[2, row.len()], &DEVICE).unwrap();
+    let row: Vec<i32> = vec![91, 81, 92, 93, 65, 94, 99, 53, 100]; // Q=81, a=65, 5=53
+    let tokens_data: Vec<i32> = row.iter().chain(row.iter()).cloned().collect();
+    let tokens =
+        Tensor::<B, 2, Int>::from_data(TensorData::new(tokens_data, [2, row.len()]), &DEVICE);
     let rewards = vec![1.5, -0.5];
 
-    let model_fn = |t: &Tensor| -> candle_core::Result<Tensor> {
+    let model_fn = |t: Tensor<B, 2, Int>| -> Tensor<B, 3> {
         let dims = t.dims();
-        Tensor::randn(0.0f32, 1.0, &[dims[0], dims[1], 128], &DEVICE)
+        Tensor::<B, 3>::zeros([dims[0], dims[1], 128], &DEVICE)
     };
 
-    let loss = rl_loss(&model_fn, &tokens, &rewards, &mask_fn).unwrap();
-    let val: f32 = loss.to_scalar().unwrap();
+    let loss = rl_loss(&model_fn, tokens, &rewards, &mask_fn);
+    let val: f32 = loss.into_scalar();
     assert!(val.is_finite(), "RL loss should be finite, got {val}");
 }
 
 #[test]
 fn test_train_llm_sft_api() {
     // Verify the function is callable and handles max_iter=0 gracefully
-    let model_fn = |t: &Tensor| -> candle_core::Result<Tensor> {
+    let model_fn = |t: Tensor<B, 2, Int>| -> Tensor<B, 3> {
         let dims = t.dims();
-        Tensor::randn(0.0f32, 1.0, &[dims[0], dims[1], 10], &DEVICE)
+        Tensor::<B, 3>::zeros([dims[0], dims[1], 10], &DEVICE)
     };
-    let mut optimizer_fn = || -> candle_core::Result<()> { Ok(()) };
-    let loader: Vec<(Tensor, Tensor, Tensor)> = vec![];
+    let mut optimizer_fn = || {};
+    let loader: Vec<BatchItem> = vec![];
 
-    let result = train_llm_sft(&model_fn, &loader, &mut optimizer_fn, Some(0));
-    assert!(result.is_ok());
+    train_llm_sft(&model_fn, &loader, &mut optimizer_fn, Some(0));
 }
 
 // ============================================================
@@ -286,11 +306,12 @@ fn test_train_llm_sft_api() {
 
 #[test]
 fn test_eval_reasoning_model() {
-    let mut model_fn = eval_reasoning_model().unwrap();
+    let mut model_fn = eval_reasoning_model();
 
     // Basic forward pass
-    let tokens = Tensor::new(&[[0u32, 1, 2, 3]], &DEVICE).unwrap();
-    let full = model_fn(&tokens, 0, false).unwrap();
+    let tokens =
+        Tensor::<B, 2, Int>::from_data(TensorData::new(vec![0i32, 1, 2, 3], [1, 4]), &DEVICE);
+    let full = model_fn(tokens.clone(), 0, false);
 
     assert_eq!(full.dims()[0], 1);
     assert_eq!(full.dims()[1], 4);
@@ -299,29 +320,32 @@ fn test_eval_reasoning_model() {
 
     // Outputs should be finite
     let first_logits: Vec<f32> = full
+        .clone()
         .narrow(2, 0, 16.min(vocab_size))
-        .unwrap()
-        .flatten_all()
-        .unwrap()
-        .to_vec1()
+        .reshape([4 * 16.min(vocab_size)])
+        .into_data()
+        .to_vec::<f32>()
         .unwrap();
     for v in &first_logits {
         assert!(v.is_finite(), "eval_reasoning_model has non-finite logits");
     }
 
     // KV cache consistency
-    let mut model_fn2 = eval_reasoning_model().unwrap();
-    let _prefix = model_fn2(&tokens.narrow(1, 0, 3).unwrap(), 0, true).unwrap();
-    let tail = model_fn2(&tokens.narrow(1, 3, 1).unwrap(), 3, true).unwrap();
+    let mut model_fn2 = eval_reasoning_model();
+    let _prefix = model_fn2(tokens.clone().narrow(1, 0, 3), 0, true);
+    let tail = model_fn2(tokens.clone().narrow(1, 3, 1), 3, true);
 
     let full_last: Vec<f32> = full
         .narrow(1, 3, 1)
-        .unwrap()
-        .flatten_all()
-        .unwrap()
-        .to_vec1()
+        .reshape([vocab_size])
+        .into_data()
+        .to_vec::<f32>()
         .unwrap();
-    let tail_vec: Vec<f32> = tail.flatten_all().unwrap().to_vec1().unwrap();
+    let tail_vec: Vec<f32> = tail
+        .reshape([vocab_size])
+        .into_data()
+        .to_vec::<f32>()
+        .unwrap();
     let max_diff: f32 = full_last
         .iter()
         .zip(tail_vec.iter())

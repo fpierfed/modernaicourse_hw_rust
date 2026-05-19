@@ -1,5 +1,11 @@
 use hw2::*;
-use ndarray::prelude::*;
+
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+use burn::tensor::{Int, Tensor, TensorData};
+
+type B = Autodiff<NdArray<f32>>;
+const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
 
 const EPS: f64 = 1e-6;
 
@@ -219,36 +225,36 @@ fn test_compute_gradients_reused_intermediate() {
 
 #[test]
 fn test_cross_entropy_loss() {
-    let y_pred = array![[2.0, 1.0, 0.0], [0.0, 2.0, 1.0]];
-    let y = array![0, 2];
-    let loss = cross_entropy_loss(&y_pred, &y);
-    assert!((loss - 0.9076060056686401).abs() < 1e-6);
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0, 0.0], [0.0, 2.0, 1.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 2]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(y_pred, y).into_scalar();
+    assert!((loss - 0.907_606).abs() < 1e-5);
 }
 
 #[test]
 fn test_cross_entropy_loss_three_class_batch() {
-    let y_pred = array![
-        [1.0, 0.0, -1.0],
-        [2.0, 1.0, 0.0],
-        [-1.0, 2.0, 1.0],
-    ];
-    let y = array![0, 2, 1];
-    let loss = cross_entropy_loss(&y_pred, &y);
-    assert!((loss - 1.054741381885649).abs() < 1e-6);
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[1.0f32, 0.0, -1.0], [2.0, 1.0, 0.0], [-1.0, 2.0, 1.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 2, 1]), &DEVICE);
+    let loss: f32 = cross_entropy_loss(y_pred, y).into_scalar();
+    assert!((loss - 1.054741).abs() < 1e-4);
 }
 
 // --- Error rate ---
 
 #[test]
 fn test_error() {
-    let y_pred = array![
-        [3.0, 1.0],
-        [0.0, 2.0],
-        [1.0, 1.0],
-        [-1.0, 0.0],
-    ];
-    let y = array![0, 1, 1, 1];
-    let err = error(&y_pred, &y);
+    let y_pred: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[3.0f32, 1.0], [0.0, 2.0], [1.0, 1.0], [-1.0, 0.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1, 1, 1]), &DEVICE);
+    let err = error_rate(y_pred, y);
     assert!((err - 0.25).abs() < 1e-6);
 }
 
@@ -256,24 +262,24 @@ fn test_error() {
 
 #[test]
 fn test_train_sgd_one_epoch() {
-    let x = array![
-        [2.0, 1.0],
-        [1.0, 2.0],
-        [-2.0, -1.0],
-        [-1.0, -2.0],
-    ];
-    let y = array![1, 1, 0, 0];
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0], [1.0, 2.0], [-2.0, -1.0], [-1.0, -2.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 1, 0, 0]), &DEVICE);
 
-    let w = train_sgd(&x, &y, 2, 1, 0.1, 2);
-    let expected = array![[-0.13340412, -0.13340412], [0.13340412, 0.13340412]];
-    assert_eq!(w.shape(), &[2, 2]);
+    let w = train_sgd(x, y, 2, 1, 0.1, 2);
+    assert_eq!(w.dims(), [2, 2]);
+
+    let expected = [[-0.13340412f32, -0.13340412], [0.13340412, 0.13340412]];
+    let w_data: Vec<f32> = w.into_data().to_vec().unwrap();
     for i in 0..2 {
         for j in 0..2 {
             assert!(
-                (w[[i, j]] - expected[[i, j]]).abs() < 1e-5,
+                (w_data[i * 2 + j] - expected[i][j]).abs() < 1e-5,
                 "w[[{i}, {j}]] = {}, expected {}",
-                w[[i, j]],
-                expected[[i, j]]
+                w_data[i * 2 + j],
+                expected[i][j]
             );
         }
     }
@@ -281,23 +287,23 @@ fn test_train_sgd_one_epoch() {
 
 #[test]
 fn test_train_sgd() {
-    let x = array![
-        [2.0, 1.0],
-        [1.0, 2.0],
-        [-2.0, -1.0],
-        [-1.0, -2.0],
-    ];
-    let y = array![1, 1, 0, 0];
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0], [1.0, 2.0], [-2.0, -1.0], [-1.0, -2.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 1, 0, 0]), &DEVICE);
 
-    let w = train_sgd(&x, &y, 2, 20, 0.1, 2);
-    assert_eq!(w.shape(), &[2, 2]);
+    let w = train_sgd(x.clone(), y.clone(), 2, 20, 0.1, 2);
+    assert_eq!(w.dims(), [2, 2]);
 
     // Verify predictions are correct after training
-    for (i, xi) in x.axis_iter(Axis(0)).enumerate() {
-        let yi = y[i];
-        let scores: Vec<f64> = w
-            .axis_iter(Axis(0))
-            .map(|wj| wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum())
+    let w_data: Vec<f32> = w.clone().into_data().to_vec().unwrap();
+    let x_data: Vec<f32> = x.into_data().to_vec().unwrap();
+    let y_data: Vec<i32> = y.into_data().to_vec().unwrap();
+    for i in 0..4 {
+        let yi = y_data[i] as usize;
+        let scores: Vec<f32> = (0..2)
+            .map(|k| (0..2).map(|j| w_data[k * 2 + j] * x_data[i * 2 + j]).sum())
             .collect();
         let pred = scores
             .iter()
@@ -307,27 +313,27 @@ fn test_train_sgd() {
             .0;
         assert_eq!(pred, yi);
     }
-    assert!(w.iter().any(|&wij| wij.abs() > EPS));
+    assert!(w_data.iter().any(|&wij| wij.abs() > EPS as f32));
 }
 
 #[test]
 fn test_train_sgd_fifteen_epochs() {
-    let x = array![
-        [2.0, 1.0],
-        [1.0, 2.0],
-        [-2.0, -1.0],
-        [-1.0, -2.0],
-    ];
-    let y = array![1, 1, 0, 0];
+    let x: Tensor<B, 2> = Tensor::from_data(
+        TensorData::from([[2.0f32, 1.0], [1.0, 2.0], [-2.0, -1.0], [-1.0, -2.0]]),
+        &DEVICE,
+    );
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 1, 0, 0]), &DEVICE);
 
-    let w = train_sgd(&x, &y, 2, 15, 0.1, 2);
-    assert_eq!(w.shape(), &[2, 2]);
+    let w = train_sgd(x.clone(), y.clone(), 2, 15, 0.1, 2);
+    assert_eq!(w.dims(), [2, 2]);
 
-    for (i, xi) in x.axis_iter(Axis(0)).enumerate() {
-        let yi = y[i];
-        let scores: Vec<f64> = w
-            .axis_iter(Axis(0))
-            .map(|wj| wj.iter().zip(xi.iter()).map(|(a, b)| a * b).sum())
+    let w_data: Vec<f32> = w.clone().into_data().to_vec().unwrap();
+    let x_data: Vec<f32> = x.into_data().to_vec().unwrap();
+    let y_data: Vec<i32> = y.into_data().to_vec().unwrap();
+    for i in 0..4 {
+        let yi = y_data[i] as usize;
+        let scores: Vec<f32> = (0..2)
+            .map(|k| (0..2).map(|j| w_data[k * 2 + j] * x_data[i * 2 + j]).sum())
             .collect();
         let pred = scores
             .iter()
@@ -338,6 +344,6 @@ fn test_train_sgd_fifteen_epochs() {
         assert_eq!(pred, yi);
     }
 
-    let norm = w.iter().map(|&wij| wij * wij).sum::<f64>().sqrt();
-    assert!(norm > EPS, "trained weights should not stay at zero");
+    let norm: f32 = w_data.iter().map(|&wij| wij * wij).sum::<f32>().sqrt();
+    assert!(norm > EPS as f32, "trained weights should not stay at zero");
 }

@@ -15,7 +15,7 @@ capabilities.
 3. [HW0: Foundations (Pure Rust)](#hw0-foundations)
 4. [HW1: Manual Linear Algebra (ndarray)](#hw1-manual-linear-algebra)
 5. [HW2: Automatic Differentiation (Graph-based)](#hw2-automatic-differentiation)
-6. [HW3–HW4: Neural Network Modules (candle)](#hw3-hw4-neural-network-modules)
+6. [HW3–HW4: Neural Network Modules (burn)](#hw3-hw4-neural-network-modules)
 7. [HW5: Transformer Architecture](#hw5-transformer-architecture)
 8. [HW6: LLM Training Pipeline](#hw6-llm-training-pipeline)
 9. [HW7: Tool-Use Agent](#hw7-tool-use-agent)
@@ -48,7 +48,7 @@ dependency versions to avoid conflicts and keep upgrades synchronized.
 **Why separate crates instead of one library?**
 
 - Each homework has distinct dependencies (hw0 needs nothing, hw1 needs ndarray,
-  hw3+ need candle). Separate crates mean you don't pull in a tensor framework
+  hw3+ need burn). Separate crates mean you don't pull in a tensor framework
   just to work on polynomial multiplication.
 - Compile times: `cargo test -p hw0` compiles only hw0 and its (zero)
   dependencies. This makes the edit-compile-test cycle fast for early homeworks.
@@ -66,7 +66,7 @@ The workspace uses three tiers of dependencies, introduced progressively:
 |------|--------|-------------|-----------|
 | 0 | hw0 | None | Pure algorithms need no external types |
 | 1 | hw1, hw2 | `ndarray` | Need multi-dimensional arrays but not autograd |
-| 2 | hw3–hw7 | `candle-core`, `candle-nn` | Need tensors with GPU support, autograd, nn modules |
+| 2 | hw3–hw7 | `burn` | Need tensors with autograd, typed dimensions, nn modules |
 
 ### Why ndarray for Tier 1?
 
@@ -76,21 +76,22 @@ but you explicitly do *not* want a built-in `matmul`. `ndarray::Array2<f32>`
 gives you exactly that: a shaped container with element access, slicing, and
 reshaping, without pulling in BLAS.
 
-### Why candle for Tier 2?
+### Why burn for Tier 2?
 
-[Candle](https://github.com/huggingface/candle) is a minimalist tensor
-framework by HuggingFace that closely mirrors PyTorch's API in Rust. Compared
-to alternatives:
+[Burn](https://github.com/tracel-ai/burn) is a comprehensive deep learning
+framework in Rust with a strong type system. Tensors carry their dimensionality
+at compile time (`Tensor<B, D>` where D is a const generic), catching shape
+errors before runtime. Compared to alternatives:
 
-- **burn**: More opinionated, uses a backend abstraction that adds complexity.
-  Great for production but overkill for a learning exercise.
+- **candle**: Simpler API but untyped dimensions — shape errors only appear at
+  runtime. Burn's compile-time dimension tracking catches more bugs early.
 - **tch-rs**: Rust bindings to libtorch. Faithful to PyTorch but requires
-  linking against a 2GB C++ library. Candle is pure Rust.
+  linking against a 2GB C++ library. Burn is pure Rust.
 - **dfdx**: Interesting but less ecosystem support for loading model weights.
 
-Candle gives us `Tensor`, automatic differentiation via `.backward()`, and
-`candle_nn` for parameter management — the minimum needed to port PyTorch-style
-training code.
+Burn gives us typed tensors, automatic differentiation via the `Autodiff`
+backend wrapper, and a clean module system — everything needed to port
+PyTorch-style training code with added compile-time safety.
 
 ---
 
@@ -275,25 +276,31 @@ operates on scalars and would be impractically slow for batch training.
 
 **Concepts**: Parameterized layers, optimizers, data loading, training loops.
 
-### Design: candle's Module System
+### Design: burn's Module System
 
-Candle uses `VarMap` for parameter management (analogous to PyTorch's
-`nn.Module` parameter registration):
+Burn uses typed tensors with compile-time dimensionality and a backend
+abstraction for parameter management:
 
 ```rust
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+use burn::tensor::{Tensor, Int};
+
+type B = Autodiff<NdArray<f32>>;
+
 pub struct Linear {
-    weight: candle_core::Tensor,  // stored in VarMap
+    weight: Tensor<B, 2>,  // (out_dim, in_dim)
 }
 
 impl Linear {
-    pub fn new(in_f: usize, out_f: usize, vm: &VarMap, name: &str) -> Result<Self> {
-        let weight = vm.get_or_init(/* shape, initializer */)?;
-        Ok(Linear { weight })
+    pub fn new(in_f: usize, out_f: usize, device: &NdArrayDevice) -> Self {
+        // Kaiming initialization
+        todo!()
     }
 
-    pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // x @ weight.T
-        x.matmul(&self.weight.t()?)
+    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+        // x @ weight.T (generic over input dimensionality)
+        todo!()
     }
 }
 ```
@@ -306,31 +313,30 @@ ReLU networks.
 
 ```rust
 pub struct SGD {
-    params: Vec<Tensor>,
+    params: Vec<Tensor<B, 2>>,
     lr: f64,
 }
 
 impl SGD {
-    pub fn step(&mut self) -> Result<()> {
+    pub fn step(&mut self, grads: &<B as AutodiffBackend>::Gradients) {
         for p in &mut self.params {
-            // p = p - lr * p.grad
-            let grad = p.grad()?;
-            *p = (p.as_ref() - (grad * self.lr)?)?;
+            let grad = p.grad(grads).unwrap();
+            // p = p - lr * grad (detach and re-attach for next backward)
+            todo!()
         }
-        Ok(())
     }
 }
 ```
 
 ### DataLoader
 
-The Rust DataLoader implements `Iterator`, yielding `(Tensor, Tensor)` pairs.
+The Rust DataLoader implements `Iterator`, yielding `(Tensor<B, 2>, Tensor<B, 1, Int>)` pairs.
 Unlike Python's `__iter__`/`__next__`, Rust iterators are types that implement
 the `Iterator` trait:
 
 ```rust
 impl Iterator for DataLoader {
-    type Item = (Tensor, Tensor);
+    type Item = (Tensor<B, 2>, Tensor<B, 1, Int>);
 
     fn next(&mut self) -> Option<Self::Item> {
         if self.offset >= self.n_samples {
@@ -351,15 +357,16 @@ resets when exhausted).
 ### The `epoch` Function
 
 This is a higher-order function that takes a model (as a closure/function
-pointer), a loss function, and optionally an optimizer:
+pointer) and optionally an optimizer:
 
 ```rust
-pub fn epoch(
-    model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    loader: &[(Tensor, Tensor)],
-    loss_fn: &dyn Fn(&Tensor, &Tensor) -> Result<Tensor>,
+pub fn epoch<M>(
+    model: &M,
+    loader: &[(Tensor<B, 2>, Tensor<B, 1, Int>)],
     optimizer: Option<&mut SGD>,
-) -> Result<(f64, f64)>
+) -> (f64, f64)
+where
+    M: Fn(Tensor<B, 2>) -> Tensor<B, 2>,
 ```
 
 If `optimizer` is `None`, it's an evaluation pass (no gradient updates). If
@@ -556,15 +563,17 @@ let z = multiply(&x, &y);  // instead of x * y
 
 Or use a builder pattern / expression macro.
 
-### 3. Error handling: Result vs Panic
+### 3. Error handling: Typed tensors vs runtime panics
 
 The Python code uses assertions and lets exceptions propagate. The Rust code
 uses two strategies:
 
 - **Dimension mismatches** (hw1): `panic!` / `assert!` — these are programmer
   errors that should never happen in correct code.
-- **Computation errors** (hw3+): `candle_core::Result<T>` — these represent
-  fallible operations (device errors, shape mismatches at runtime).
+- **Shape errors** (hw3+): Burn catches many shape errors at compile time via
+  its `Tensor<B, D>` type system (a 2D tensor can't be passed where a 3D tensor
+  is expected). Runtime shape mismatches (e.g., incompatible matrix dimensions)
+  panic rather than returning Results.
 
 ### 4. Random number generation
 
@@ -615,11 +624,11 @@ assert!((result - expected).abs() < 1e-6);       // scalar
 assert!(tensor.abs_diff_eq(&expected, 1e-5));     // ndarray
 ```
 
-For candle tensors, compute max absolute difference:
+For burn tensors, compute max absolute difference:
 
 ```rust
-let diff = a.sub(&b)?.abs()?.max_all()?.to_scalar::<f32>()?;
-assert!(diff < 1e-5, "max diff = {diff}");
+let diff: f32 = (a - b).abs().sum().into_scalar();
+assert!(diff < 1e-5, "sum abs diff = {diff}");
 ```
 
 ---
@@ -645,5 +654,5 @@ with working code. The tests tell you exactly what behavior is expected.
 
 Start with hw0 (zero dependencies, pure logic), then hw1 (introduces ndarray),
 then hw2 (the autodiff graph is the most architecturally challenging piece of
-pure Rust), and finally hw3+ (which lean on candle's autograd so you can focus
+pure Rust), and finally hw3+ (which lean on burn's autograd so you can focus
 on the ML concepts rather than fighting the borrow checker).

@@ -64,9 +64,11 @@ use std::ops::Neg as StdNeg;
 use std::ops::Sub as StdSub;
 use std::rc::Rc;
 
-use ndarray::prelude::*;
-use ndarray::Data;
-use ndarray_stats::QuantileExt;
+use burn::backend::ndarray::NdArray;
+use burn::backend::Autodiff;
+use burn::tensor::{Int, Tensor};
+
+pub type B = Autodiff<NdArray<f32>>;
 
 /// A node in the computation graph.
 
@@ -412,25 +414,24 @@ impl Variable {
  * The error is the fraction of predictions that are wrong (argmax of y_pred != y).
  */
 
-// ndarray does not have this function...
-pub fn logsumexp<S>(x: &ArrayBase<S, Ix2>) -> Array1<f64>
-where
-    S: Data<Elem = f64>,
-{
+// burn does not have this function...
+#[allow(dead_code)]
+fn logsumexp(_x: Tensor<B, 2>) -> Tensor<B, 1> {
     //
     // The mathematically stable formula for logsumexp is
     //   logsumexp(x) = max(x) = ln(sum(exp(x_i - max(x))))
     //
 
-    let max_x = x.map_axis(Axis(1), |row| {
-        row.fold(f64::NEG_INFINITY, |acc, &val| acc.max(val))
-    });
-
-    x.rows()
-        .into_iter()
-        .zip(max_x)
-        .map(|(row, max_row)| max_row + row.mapv(|val| (val - max_row).exp()).sum().ln())
-        .collect()
+    // let max_x = x.map_axis(Axis(1), |row| {
+    //     row.fold(f64::NEG_INFINITY, |acc, &val| acc.max(val))
+    // });
+    //
+    // x.rows()
+    //     .into_iter()
+    //     .zip(max_x)
+    //     .map(|(row, max_row)| max_row + row.mapv(|val| (val - max_row).exp()).sum().ln())
+    //     .collect()
+    todo!();
 }
 
 /// Compute the average cross entropy loss between predictions and desired outputs.
@@ -441,20 +442,17 @@ where
 ///
 /// Output:
 ///     f64 - average cross entropy loss
-pub fn cross_entropy_loss<S1, S2>(y_pred: &ArrayBase<S1, Ix2>, y: &ArrayBase<S2, Ix1>) -> f64
-where
-    S1: Data<Elem = f64>,
-    S2: Data<Elem = usize>,
-{
-    let mut total_loss = 0.0;
-    let logsumexp_preds = logsumexp(y_pred);
-
-    for (i, true_class) in y.into_iter().enumerate() {
-        let predicted_class = y_pred[[i, *true_class]];
-
-        total_loss += -predicted_class + logsumexp_preds[i];
-    }
-    total_loss / y.shape()[0] as f64
+pub fn cross_entropy_loss(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> Tensor<B, 1> {
+    // let mut total_loss = 0.0;
+    // let logsumexp_preds = logsumexp(y_pred);
+    //
+    // for (i, true_class) in y.into_iter().enumerate() {
+    //     let predicted_class = y_pred[[i, *true_class]];
+    //
+    //     total_loss += -predicted_class + logsumexp_preds[i];
+    // }
+    // total_loss / y.shape()[0] as f64
+    todo!();
 }
 
 /// Compute the average error between predictions and desired outputs, assuming
@@ -466,20 +464,17 @@ where
 ///
 /// Output:
 ///     f64 - average error rate
-pub fn error<S1, S2>(y_pred: &ArrayBase<S1, Ix2>, y: &ArrayBase<S2, Ix1>) -> f64
-where
-    S1: Data<Elem = f64>,
-    S2: Data<Elem = usize>,
-{
-    let mut correct = 0.0;
-    for (i, true_class) in y.into_iter().enumerate() {
-        let prediction = y_pred.row(i).argmax().unwrap();
-        if prediction == *true_class {
-            correct += 1.0;
-        }
-    }
-
-    1.0 - correct / y.shape()[0] as f64
+pub fn error_rate(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> f64 {
+    // let mut correct = 0.0;
+    // for (i, true_class) in y.into_iter().enumerate() {
+    //     let prediction = y_pred.row(i).argmax().unwrap();
+    //     if prediction == *true_class {
+    //         correct += 1.0;
+    //     }
+    // }
+    //
+    // 1.0 - correct / y.shape()[0] as f64
+    todo!();
 }
 
 /*
@@ -505,17 +500,13 @@ where
 ///
 /// Output:
 ///     2D array (k x n) - trained linear classifier weights
-pub fn train_sgd<S1, S2>(
-    x: &ArrayBase<S1, Ix2>,
-    y: &ArrayBase<S2, Ix1>,
-    n_classes: usize,
-    epochs: usize,
-    step_size: f64,
-    batch_size: usize,
-) -> Array2<f64>
-where
-    S1: Data<Elem = f64>,
-    S2: Data<Elem = usize>,
-{
+pub fn train_sgd(
+    _x: Tensor<B, 2>,
+    _y: Tensor<B, 1, Int>,
+    _n_classes: usize,
+    _epochs: usize,
+    _step_size: f64,
+    _batch_size: usize,
+) -> Tensor<B, 2> {
     todo!()
 }

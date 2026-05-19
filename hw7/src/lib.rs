@@ -75,8 +75,19 @@
  * For each example: generate completions, grade them, compute RL loss, optimize.
  */
 
-use candle_core::{Result, Tensor};
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+use burn::tensor::Int;
+#[allow(unused_imports)]
+use burn::tensor::{Tensor, TensorData};
 use std::collections::HashMap;
+
+pub type B = Autodiff<NdArray<f32>>;
+pub type Device = NdArrayDevice;
+pub type ModelFn = Box<dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>>;
+pub type BatchItem = (Tensor<B, 2, Int>, Tensor<B, 2, Int>, Tensor<B, 2, Int>);
+
+pub const DEVICE: Device = NdArrayDevice::Cpu;
 
 // ============================================================
 // Part I: Parallel Sampling
@@ -87,13 +98,13 @@ use std::collections::HashMap;
 /// Stops when ALL completions contain eot_token or max_tokens is reached.
 /// Returns tensor of shape (num_completions, max_tokens).
 pub fn generate_parallel(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-    _prompt_tokens: &[u32],
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
+    _prompt_tokens: &[i32],
     _num_completions: usize,
-    _eot_token: Option<u32>,
+    _eot_token: Option<i32>,
     _temp: f64,
     _max_tokens: usize,
-) -> Result<Tensor> {
+) -> Tensor<B, 2, Int> {
     todo!()
 }
 
@@ -103,7 +114,7 @@ pub fn generate_parallel(
 
 /// Convert one GSM8K example (with <<expr=result>> tool calls and #### answer)
 /// into the tagged reasoning format with QUESTION, THINK, TOOL, RESPONSE, ANSWER tags.
-pub fn convert_gsm8k_to_format(question: &str, answer: &str) -> String {
+pub fn convert_gsm8k_to_format(_question: &str, _answer: &str) -> String {
     todo!()
 }
 
@@ -125,11 +136,11 @@ pub fn get_loss_mask(_tokens: &[u32], _special_tokens: &HashMap<String, u32>) ->
 
 /// Train with supervised finetuning using masked next-token loss.
 pub fn train_llm_sft(
-    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _loader: &[(Tensor, Tensor, Tensor)], // (x, y, mask)
-    _optimizer: &mut dyn FnMut() -> Result<()>,
+    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _loader: &[BatchItem],
+    _optimizer: &mut dyn FnMut(),
     _max_iter: Option<usize>,
-) -> Result<()> {
+) {
     todo!()
 }
 
@@ -139,29 +150,30 @@ pub fn train_llm_sft(
 
 /// Evaluate an arithmetic expression. Round to integer if within 1e-4.
 /// Return "ERROR" string on any failure.
-pub fn eval_tool(tool_call_text: &str) -> String {
+pub fn eval_tool(_tool_call_text: &str) -> String {
     todo!()
 }
 
 /// Generate completions with tool call interception.
 /// When </TOOL> is produced, evaluate the expression and inject <RESPONSE>...</RESPONSE>.
 /// After </ANSWER>, force tokens to zero.
+#[allow(clippy::too_many_arguments)]
 pub fn generate_with_tools(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-    _prompt_tokens: &[u32],
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
+    _prompt_tokens: &[i32],
     _encode_fn: &dyn Fn(&str) -> Vec<u32>,
     _decode_fn: &dyn Fn(&[u32]) -> String,
     _special_tokens: &HashMap<String, u32>,
     _num_completions: usize,
     _temp: f64,
     _max_tokens: usize,
-) -> Result<Tensor> {
+) -> Tensor<B, 2, Int> {
     todo!()
 }
 
 /// Extract the integer answer between <ANSWER> and </ANSWER> tags.
 /// Returns None if parsing fails.
-pub fn extract_answer(text: &str) -> Option<i64> {
+pub fn extract_answer(_text: &str) -> Option<i64> {
     todo!()
 }
 
@@ -170,7 +182,7 @@ pub fn extract_answer(text: &str) -> Option<i64> {
 /// format_weight added if answer is properly formatted (extract_answer != None).
 pub fn grade_responses(
     _decode_fn: &dyn Fn(&[u32]) -> String,
-    _tokens: &Tensor,
+    _tokens: Tensor<B, 2, Int>,
     _ground_truth_answer: i64,
     _correct_weight: f64,
     _format_weight: f64,
@@ -180,9 +192,10 @@ pub fn grade_responses(
 
 /// Evaluate model accuracy on GSM8K:
 /// Returns (pass@1 accuracy, formatting rate, pass@k rate).
+#[allow(clippy::too_many_arguments)]
 pub fn evaluate(
-    _problems: &[(Vec<u32>, i64)], // (prompt_tokens, expected_answer)
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
+    _problems: &[(Vec<i32>, i64)], // (prompt_tokens, expected_answer)
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
     _encode_fn: &dyn Fn(&str) -> Vec<u32>,
     _decode_fn: &dyn Fn(&[u32]) -> String,
     _special_tokens: &HashMap<String, u32>,
@@ -190,7 +203,7 @@ pub fn evaluate(
     _temp: f64,
     _max_tokens: usize,
     _max_cases: usize,
-) -> Result<(f64, f64, f64)> {
+) -> (f64, f64, f64) {
     todo!()
 }
 
@@ -202,21 +215,22 @@ pub fn evaluate(
 /// L_RL = (1/N_tok) * sum_i log_p(y_i|x) * (R_i - R_bar)
 /// where R_bar = mean(rewards).
 pub fn rl_loss(
-    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _tokens: &Tensor, // (num_completions, seq_len)
-    _rewards: &[f64], // (num_completions,)
+    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _tokens: Tensor<B, 2, Int>, // (num_completions, seq_len)
+    _rewards: &[f64],           // (num_completions,)
     _mask_fn: &dyn Fn(&[u32]) -> Vec<bool>,
-) -> Result<Tensor> {
+) -> Tensor<B, 1> {
     todo!()
 }
 
 /// Run one pass of RL training: for each example, generate completions,
 /// grade them, compute RL loss, and take an optimization step.
+#[allow(clippy::too_many_arguments)]
 pub fn train_llm_rl(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-    _model_forward: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _loader: &[(Vec<u32>, i64)], // (prompt_tokens, ground_truth_answer)
-    _optimizer: &mut dyn FnMut() -> Result<()>,
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
+    _model_forward: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _loader: &[(Vec<i32>, i64)], // (prompt_tokens, ground_truth_answer)
+    _optimizer: &mut dyn FnMut(),
     _encode_fn: &dyn Fn(&str) -> Vec<u32>,
     _decode_fn: &dyn Fn(&[u32]) -> String,
     _special_tokens: &HashMap<String, u32>,
@@ -226,7 +240,7 @@ pub fn train_llm_rl(
     _max_iter: Option<usize>,
     _correct_weight: f64,
     _format_weight: f64,
-) -> Result<()> {
+) {
     todo!()
 }
 
@@ -235,6 +249,6 @@ pub fn train_llm_rl(
 /// Returns a model capable of forward passes and KV-cached generation.
 /// The model should be able to solve basic GSM8K math problems using
 /// chain-of-thought reasoning with tool calls.
-pub fn eval_reasoning_model() -> Result<Box<dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>>> {
+pub fn eval_reasoning_model() -> ModelFn {
     todo!()
 }

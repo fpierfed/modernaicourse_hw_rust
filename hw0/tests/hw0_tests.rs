@@ -58,7 +58,7 @@ fn test_poly_mul() {
 
     let p4 = Polynomial::new(vec![0.3, 0.4, 1.6, 1.9]);
     let result = poly_mul(&p1, &p4);
-    let expected = vec![0.3, 1.9, 3.6, 11.4, 11.5, 8.0, 9.5];
+    let expected = [0.3, 1.9, 3.6, 11.4, 11.5, 8.0, 9.5];
     assert_eq!(result.coefficients.len(), expected.len());
     for (a, b) in result.coefficients.iter().zip(expected.iter()) {
         assert!((a - b).abs() < 1e-10, "{a} != {b}");

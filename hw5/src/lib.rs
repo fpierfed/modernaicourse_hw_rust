@@ -66,16 +66,26 @@
  *
  * ### Question 11 - Training Your LLM
  * For each (x, y) from the data loader:
- * 1. Forward pass: model(x).float()
+ * 1. Forward pass: model(x)
  * 2. Compute cross_entropy_loss(predictions, y)
- * 3. opt.zero_grad(); loss.backward(); opt.step()
+ * 3. Backward pass and optimizer step
  *
  * ### Question 12 - Generation
  * Autoregressively sample tokens using KV cache. Stop at eot_token or max_tokens.
  */
 
-use candle_core::{Result, Tensor};
-use candle_nn::VarMap;
+use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::Autodiff;
+use burn::tensor::backend::AutodiffBackend;
+use burn::tensor::Int;
+#[allow(unused_imports)]
+use burn::tensor::{Distribution, Tensor, TensorData};
+
+pub type B = Autodiff<NdArray<f32>>;
+pub type Device = NdArrayDevice;
+pub type TokenBatch = (Tensor<B, 2, Int>, Tensor<B, 2, Int>);
+
+pub const DEVICE: Device = NdArrayDevice::Cpu;
 
 // ============================================================
 // Part I: BPE Tokenization
@@ -87,37 +97,37 @@ use std::path::Path;
 /// Split text into a corpus of words (split on whitespace, keep space as prefix).
 /// Returns (corpus, counts) where corpus[i] is a word as a list of strings,
 /// and counts[i] is how many times that word appeared in the text.
-pub fn text_to_corpus(text: &str) -> (Vec<Vec<String>>, Vec<usize>) {
+pub fn text_to_corpus(_text: &str) -> (Vec<Vec<String>>, Vec<usize>) {
     todo!()
 }
 
 /// Find the most common adjacent pair in the corpus, weighted by counts.
-pub fn most_common_pair(corpus: &[Vec<String>], counts: &[usize]) -> (String, String) {
+pub fn most_common_pair(_corpus: &[Vec<String>], _counts: &[usize]) -> (String, String) {
     todo!()
 }
 
 /// Merge all occurrences of (a, b) into "ab" in the corpus (in-place).
-pub fn merge_pair(corpus: &mut [Vec<String>], pair: &(String, String)) {
+pub fn merge_pair(_corpus: &mut [Vec<String>], _pair: &(String, String)) {
     todo!()
 }
 
 /// Train BPE tokenizer. Returns (token_to_id, merges).
 /// vocab_size is the target vocabulary size (starts from 256 base characters).
-pub fn train_bpe(text: &str, vocab_size: usize) -> (HashMap<String, u32>, Vec<(String, String)>) {
+pub fn train_bpe(_text: &str, _vocab_size: usize) -> (HashMap<String, u32>, Vec<(String, String)>) {
     todo!()
 }
 
 /// Encode a string using trained BPE merges and token map.
 pub fn bpe_encode(
-    text: &str,
-    merges: &[(String, String)],
-    tokens: &HashMap<String, u32>,
+    _text: &str,
+    _merges: &[(String, String)],
+    _tokens: &HashMap<String, u32>,
 ) -> Vec<u32> {
     todo!()
 }
 
 /// Decode a list of token IDs back to a string.
-pub fn bpe_decode(ids: &[u32], tokens: &HashMap<String, u32>) -> String {
+pub fn bpe_decode(_ids: &[u32], _tokens: &HashMap<String, u32>) -> String {
     todo!()
 }
 
@@ -127,46 +137,46 @@ pub fn bpe_decode(ids: &[u32], tokens: &HashMap<String, u32>) -> String {
 
 pub struct Linear {}
 impl Linear {
-    pub fn new(_in_f: usize, _out_f: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_in_f: usize, _out_f: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B, 2> {
         todo!()
     }
 }
 
 pub struct Embedding {}
 impl Embedding {
-    pub fn new(_num_tokens: usize, _dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_num_tokens: usize, _dim: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _indices: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, _indices: Tensor<B, 2, Int>) -> Tensor<B, 3> {
         todo!()
     }
-    pub fn weight(&self) -> &Tensor {
+    pub fn weight(&self) -> &Tensor<B, 2> {
         todo!()
     }
 }
 
-pub fn silu(_x: &Tensor) -> Result<Tensor> {
+pub fn silu<const D: usize>(_x: Tensor<B, D>) -> Tensor<B, D> {
     todo!()
 }
 
 /// RMS normalization (no learned weight, just a function).
 /// rms_norm(x) = x / sqrt(mean(x^2) + eps)
-pub fn rms_norm(_x: &Tensor, _eps: f64) -> Result<Tensor> {
+pub fn rms_norm<const D: usize>(_x: Tensor<B, D>, _eps: f64) -> Tensor<B, D> {
     todo!()
 }
 
-pub fn self_attention(
-    _q: &Tensor,
-    _k: &Tensor,
-    _v: &Tensor,
-    _mask: Option<&Tensor>,
-) -> Result<Tensor> {
+pub fn self_attention<const D: usize>(
+    _q: Tensor<B, D>,
+    _k: Tensor<B, D>,
+    _v: Tensor<B, D>,
+    _mask: Option<Tensor<B, 2>>,
+) -> Tensor<B, D> {
     todo!()
 }
 
@@ -174,22 +184,16 @@ pub struct MultiHeadAttentionKVCache {
     pub n_heads: usize,
 }
 impl MultiHeadAttentionKVCache {
-    pub fn new(
-        _dim: usize,
-        _n_heads: usize,
-        _max_cache: usize,
-        _vm: &VarMap,
-        _name: &str,
-    ) -> Result<Self> {
+    pub fn new(_dim: usize, _n_heads: usize, _max_cache: usize, _device: &Device) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: &Tensor,
-        _mask: Option<&Tensor>,
+        _x: Tensor<B, 3>,
+        _mask: Option<Tensor<B, 2>>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
@@ -197,10 +201,10 @@ impl MultiHeadAttentionKVCache {
 /// Simple two-layer MLP: silu(X @ W1^T) @ W2^T
 pub struct MLP {}
 impl MLP {
-    pub fn new(_dim: usize, _ffn_dim: usize, _vm: &VarMap, _name: &str) -> Result<Self> {
+    pub fn new(_dim: usize, _ffn_dim: usize, _device: &Device) -> Self {
         todo!()
     }
-    pub fn forward(&self, _x: &Tensor) -> Result<Tensor> {
+    pub fn forward(&self, _x: Tensor<B, 3>) -> Tensor<B, 3> {
         todo!()
     }
 }
@@ -212,18 +216,17 @@ impl TransformerBlock {
         _n_heads: usize,
         _ffn_dim: usize,
         _max_seq: usize,
-        _vm: &VarMap,
-        _name: &str,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: &Tensor,
-        _mask: Option<&Tensor>,
+        _x: Tensor<B, 3>,
+        _mask: Option<Tensor<B, 2>>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
@@ -237,16 +240,16 @@ impl LLM {
         _max_seq: usize,
         _ffn_dim: usize,
         _num_layers: usize,
-        _vm: &VarMap,
-    ) -> Result<Self> {
+        _device: &Device,
+    ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _tokens: &Tensor,
+        _tokens: Tensor<B, 2, Int>,
         _seq_pos: usize,
         _use_cache: bool,
-    ) -> Result<Tensor> {
+    ) -> Tensor<B, 3> {
         todo!()
     }
 }
@@ -256,8 +259,8 @@ impl LLM {
 // ============================================================
 
 /// Cross-entropy loss supporting multi-dimensional logits.
-/// logits: (... x k), y: (...) -> scalar.
-pub fn cross_entropy_loss(_logits: &Tensor, _targets: &Tensor) -> Result<Tensor> {
+/// logits: (N x k), y: (N) -> scalar.
+pub fn cross_entropy_loss(_logits: Tensor<B, 2>, _targets: Tensor<B, 1, Int>) -> Tensor<B, 1> {
     todo!()
 }
 
@@ -282,7 +285,7 @@ impl DataLoader {
     }
 }
 impl Iterator for DataLoader {
-    type Item = (Tensor, Tensor);
+    type Item = (Tensor<B, 2, Int>, Tensor<B, 2, Int>);
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
     }
@@ -290,40 +293,40 @@ impl Iterator for DataLoader {
 
 /// Adam optimizer.
 pub struct Adam {
-    pub u: Vec<Tensor>,
-    pub v: Vec<Tensor>,
+    pub u: Vec<Tensor<B, 2>>,
+    pub v: Vec<Tensor<B, 2>>,
 }
 impl Adam {
-    pub fn new(_params: Vec<Tensor>, _lr: f64, _betas: (f64, f64), _eps: f64) -> Self {
+    pub fn new(_params: Vec<Tensor<B, 2>>, _lr: f64, _betas: (f64, f64), _eps: f64) -> Self {
         todo!()
     }
-    pub fn step(&mut self) -> Result<()> {
+    pub fn step(&mut self, _grads: &<B as AutodiffBackend>::Gradients) {
         todo!()
     }
-    pub fn zero_grad(&mut self) -> Result<()> {
+    pub fn zero_grad(&mut self) {
         todo!()
     }
 }
 
 /// Train the LLM for one pass over the data loader.
 pub fn train_llm(
-    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _loader: &[(Tensor, Tensor)],
+    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _loader: &[TokenBatch],
     _optimizer: &mut Adam,
-) -> Result<()> {
+) {
     todo!()
 }
 
 /// Generate tokens autoregressively with temperature sampling and KV cache.
 pub fn generate(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
+    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
     _prompt_tokens: &[u32],
     _decode_fn: &dyn Fn(&[u32]) -> String,
     _stop_token: u32,
     _temp: f64,
     _max_tokens: usize,
     _verbose: bool,
-) -> Result<Vec<u32>> {
+) -> Vec<u32> {
     todo!()
 }
 
@@ -332,6 +335,6 @@ pub fn generate(
 /// The returned model should achieve < 7.0 cross-entropy loss on the first
 /// 48 tokens of TinyStories (tokenized with GPT-2), and support KV-cached
 /// inference.
-pub fn eval_llm() -> Result<LLM> {
+pub fn eval_llm() -> LLM {
     todo!()
 }
