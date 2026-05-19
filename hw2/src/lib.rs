@@ -414,44 +414,22 @@ impl Variable {
  * The error is the fraction of predictions that are wrong (argmax of y_pred != y).
  */
 
-// burn does not have this function...
+// Helper: compute logsumexp along dim 1 (rows) for numerical stability.
+// logsumexp(x) = max(x) + ln(sum(exp(x - max(x))))
 #[allow(dead_code)]
 fn logsumexp(_x: Tensor<B, 2>) -> Tensor<B, 1> {
-    //
-    // The mathematically stable formula for logsumexp is
-    //   logsumexp(x) = max(x) = ln(sum(exp(x_i - max(x))))
-    //
-
-    // let max_x = x.map_axis(Axis(1), |row| {
-    //     row.fold(f64::NEG_INFINITY, |acc, &val| acc.max(val))
-    // });
-    //
-    // x.rows()
-    //     .into_iter()
-    //     .zip(max_x)
-    //     .map(|(row, max_row)| max_row + row.mapv(|val| (val - max_row).exp()).sum().ln())
-    //     .collect()
     todo!();
 }
 
 /// Compute the average cross entropy loss between predictions and desired outputs.
 ///
 /// Input:
-///     y_pred: slice of Vec<f64> (N x k) - each row is predicted outputs for the ith example
-///     y: slice of usize (N) - each element is the desired class of the ith example
+///     y_pred: Tensor<B, 2> of shape (N x k) - predicted logits for each example
+///     y: Tensor<B, 1, Int> of shape (N) - desired class for each example
 ///
 /// Output:
-///     f64 - average cross entropy loss
+///     Tensor<B, 1> - scalar average cross entropy loss
 pub fn cross_entropy_loss(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> Tensor<B, 1> {
-    // let mut total_loss = 0.0;
-    // let logsumexp_preds = logsumexp(y_pred);
-    //
-    // for (i, true_class) in y.into_iter().enumerate() {
-    //     let predicted_class = y_pred[[i, *true_class]];
-    //
-    //     total_loss += -predicted_class + logsumexp_preds[i];
-    // }
-    // total_loss / y.shape()[0] as f64
     todo!();
 }
 
@@ -459,21 +437,12 @@ pub fn cross_entropy_loss(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> Tenso
 /// we make a "hard" prediction of whichever class has the highest predicted value.
 ///
 /// Input:
-///     y_pred: 2D array (N x k) - each row is predicted outputs
-///     y: 1D array (N) - each element is the desired class
+///     y_pred: Tensor<B, 2> of shape (N x k) - predicted logits
+///     y: Tensor<B, 1, Int> of shape (N) - desired class for each example
 ///
 /// Output:
 ///     f64 - average error rate
 pub fn error_rate(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> f64 {
-    // let mut correct = 0.0;
-    // for (i, true_class) in y.into_iter().enumerate() {
-    //     let prediction = y_pred.row(i).argmax().unwrap();
-    //     if prediction == *true_class {
-    //         correct += 1.0;
-    //     }
-    // }
-    //
-    // 1.0 - correct / y.shape()[0] as f64
     todo!();
 }
 
@@ -491,15 +460,15 @@ pub fn error_rate(_y_pred: Tensor<B, 2>, _y: Tensor<B, 1, Int>) -> f64 {
 /// Run minibatch stochastic gradient descent to minimize cross entropy loss.
 ///
 /// Inputs:
-///     x: 2D array (N x n) - training inputs
-///     y: 1D array (N) - desired outputs in 0..k-1
+///     x: Tensor<B, 2> of shape (N x n) - training inputs
+///     y: Tensor<B, 1, Int> of shape (N) - desired outputs in 0..k-1
 ///     n_classes: number of classes k
 ///     epochs: number of passes over the training set
 ///     step_size: gradient descent step size
 ///     batch_size: number of examples in a minibatch
 ///
 /// Output:
-///     2D array (k x n) - trained linear classifier weights
+///     Tensor<B, 2> of shape (k x n) - trained linear classifier weights
 pub fn train_sgd(
     _x: Tensor<B, 2>,
     _y: Tensor<B, 1, Int>,
