@@ -361,7 +361,7 @@ impl Variable {
                 inner.grad = Some(1.0);
             }
 
-            if inner.function.is_none() || inner.parents.is_empty() {
+            if inner.function.is_none() && inner.parents.is_empty() {
                 return;
             }
         }
