@@ -434,8 +434,8 @@ fn logsumexp(x: Tensor<B, 2>, dim: usize) -> Tensor<B, 2> {
 /// Output:
 ///     Tensor<B, 1> - scalar average cross entropy loss
 pub fn cross_entropy_loss(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> Tensor<B, 1> {
-    let k = y.dims()[0];
-    let true_class_indexes = y.reshape([k, 1]);
+    let batch_size = y.dims()[0];
+    let true_class_indexes = y.reshape([batch_size, 1]);
     // prediction at what should be the true class
     let predictions = y_pred.clone().gather(1, true_class_indexes);
 
@@ -452,10 +452,10 @@ pub fn cross_entropy_loss(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> Tensor<
 /// Output:
 ///     f64 - average error rate
 pub fn error_rate(y_pred: Tensor<B, 2>, y: Tensor<B, 1, Int>) -> f64 {
-    let k = y.dims()[0];
+    let batch_size = y.dims()[0];
     let accuracy = y_pred
         .argmax(1)
-        .reshape([k])
+        .reshape([batch_size])
         .equal(y)
         .float()
         .mean()
