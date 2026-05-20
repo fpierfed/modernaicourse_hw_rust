@@ -412,26 +412,58 @@ mod mnist {
     use burn::backend::ndarray::NdArrayDevice;
     use burn::tensor::{Int, Tensor, TensorData};
     use flate2::read::GzDecoder;
-    use hf_hub::api::sync::Api;
     use hw3::B;
     use std::io::Read;
 
     const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
+
+    const MIRRORS: &[&str] = &[
+        "https://ossci-datasets.s3.amazonaws.com/mnist/",
+        "http://yann.lecun.com/exdb/mnist/",
+    ];
 
     pub struct MnistDataset {
         pub x: Tensor<B, 2>,
         pub y: Tensor<B, 1, Int>,
     }
 
-    fn download_and_decompress(repo: &hf_hub::api::sync::ApiRepo, filename: &str) -> Vec<u8> {
-        let path = repo.get(filename).unwrap_or_else(|e| {
-            panic!("Failed to download {filename}: {e}");
-        });
-        let compressed = std::fs::read(&path).unwrap();
-        let mut decoder = GzDecoder::new(&compressed[..]);
-        let mut decompressed = Vec::new();
-        decoder.read_to_end(&mut decompressed).unwrap();
-        decompressed
+    fn cache_dir() -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join("mnist_cache");
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn download_and_decompress(filename: &str) -> Vec<u8> {
+        let cached = cache_dir().join(filename);
+        if cached.exists() {
+            let compressed = std::fs::read(&cached).unwrap();
+            let mut decoder = GzDecoder::new(&compressed[..]);
+            let mut decompressed = Vec::new();
+            decoder.read_to_end(&mut decompressed).unwrap();
+            return decompressed;
+        }
+
+        let client = reqwest::blocking::Client::new();
+        let mut last_err = None;
+        for mirror in MIRRORS {
+            let url = format!("{mirror}{filename}");
+            match client.get(&url).send().and_then(|r| r.error_for_status()) {
+                Ok(resp) => {
+                    let compressed = resp.bytes().unwrap();
+                    std::fs::write(&cached, &compressed).unwrap();
+                    let mut decoder = GzDecoder::new(&compressed[..]);
+                    let mut decompressed = Vec::new();
+                    decoder.read_to_end(&mut decompressed).unwrap();
+                    return decompressed;
+                }
+                Err(e) => last_err = Some(e),
+            }
+        }
+        panic!(
+            "Failed to download {} from all mirrors: {}",
+            filename,
+            last_err.unwrap()
+        );
     }
 
     fn parse_idx_images_flat(data: &[u8]) -> Tensor<B, 2> {
@@ -457,10 +489,8 @@ mod mnist {
     }
 
     pub fn load_mnist_train() -> MnistDataset {
-        let api = Api::new().unwrap();
-        let repo = api.dataset("ylecun/mnist".to_string());
-        let image_data = download_and_decompress(&repo, "train-images-idx3-ubyte.gz");
-        let label_data = download_and_decompress(&repo, "train-labels-idx1-ubyte.gz");
+        let image_data = download_and_decompress("train-images-idx3-ubyte.gz");
+        let label_data = download_and_decompress("train-labels-idx1-ubyte.gz");
         MnistDataset {
             x: parse_idx_images_flat(&image_data),
             y: parse_idx_labels(&label_data),
@@ -468,10 +498,8 @@ mod mnist {
     }
 
     pub fn load_mnist_test() -> MnistDataset {
-        let api = Api::new().unwrap();
-        let repo = api.dataset("ylecun/mnist".to_string());
-        let image_data = download_and_decompress(&repo, "t10k-images-idx3-ubyte.gz");
-        let label_data = download_and_decompress(&repo, "t10k-labels-idx1-ubyte.gz");
+        let image_data = download_and_decompress("t10k-images-idx3-ubyte.gz");
+        let label_data = download_and_decompress("t10k-labels-idx1-ubyte.gz");
         MnistDataset {
             x: parse_idx_images_flat(&image_data),
             y: parse_idx_labels(&label_data),

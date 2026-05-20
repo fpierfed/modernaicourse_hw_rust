@@ -12,3 +12,4 @@ rand_distr = { workspace = true }
 approx = { workspace = true }
 hf-hub = { workspace = true }
 flate2 = { workspace = true }
+reqwest = { workspace = true }
