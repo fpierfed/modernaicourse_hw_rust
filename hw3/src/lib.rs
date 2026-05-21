@@ -108,6 +108,9 @@ where
     }
 }
 
+// the following two finctions are copied over from hw2/src/lib.rs
+// with just input variable renaming and, for the cross entropy loss,
+// wrapping into a Module
 fn logsumexp(x: Tensor<MyAutodiffBackend, 2>, dim: usize) -> Tensor<MyAutodiffBackend, 2> {
     assert!(dim == 0 || dim == 1, "Incompatible dimension requested");
 
@@ -138,16 +141,27 @@ pub fn cross_entropy_loss(
 /// Initialize over a set of model parameters with a given learning rate.
 /// step() applies: w = w - lr * w.grad
 pub struct SGD {
-    // TODO: learning rate, parameter references
+    pub learning_rate: f64,
 }
 
 impl SGD {
-    pub fn new(_params: Vec<Tensor<MyAutodiffBackend, 2>>, _lr: f64) -> Self {
-        todo!()
+    pub fn new(lr: f64) -> Self {
+        SGD { learning_rate: lr }
     }
 
-    pub fn step(&mut self, _grads: &<MyAutodiffBackend as AutodiffBackend>::Gradients) {
-        todo!()
+    pub fn step(
+        &mut self,
+        params: &mut [Param<Tensor<MyAutodiffBackend, 2>>],
+        grads: &<MyAutodiffBackend as AutodiffBackend>::Gradients,
+    ) {
+        for param in params.iter_mut() {
+            let param_tensor = param.val();
+            if let Some(grad) = param_tensor.grad(grads) {
+                let inner = param_tensor.inner();
+                let updated_inner = inner - grad.mul_scalar(self.learning_rate);
+                *param = Param::from_tensor(Tensor::from_inner(updated_inner));
+            }
+        }
     }
 }
 

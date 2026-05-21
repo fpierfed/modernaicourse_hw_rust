@@ -91,12 +91,11 @@ fn test_cross_entropy_numerically_stable() {
 
 #[test]
 fn test_sgd_step() {
-    let layer = Linear::new(4, 3, &DEVICE);
+    let mut layer = Linear::new(4, 3, &DEVICE);
 
     let w_before: Vec<f32> = layer.weight.val().clone().into_data().to_vec().unwrap();
 
-    let params: Vec<Tensor<MyAutodiffBackend, 2>> = vec![layer.weight.val().clone()];
-    let mut opt = SGD::new(params, 0.05);
+    let mut opt = SGD::new(0.05);
 
     let x: Tensor<MyAutodiffBackend, 2> = Tensor::random([12, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
     let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(
@@ -109,7 +108,7 @@ fn test_sgd_step() {
         let logits = layer.forward(x.clone());
         let loss = cross_entropy_loss(logits, y.clone());
         let grads = loss.backward();
-        opt.step(&grads);
+        opt.step(std::slice::from_mut(&mut layer.weight), &grads);
     }
 
     let w_after: Vec<f32> = layer.weight.val().clone().into_data().to_vec().unwrap();
@@ -127,8 +126,7 @@ fn test_sgd_step() {
 fn test_sgd_zero_grad() {
     let layer = Linear::new(4, 3, &DEVICE);
 
-    let params: Vec<Tensor<MyAutodiffBackend, 2>> = vec![layer.weight.val().clone()];
-    let _opt = SGD::new(params, 0.1);
+    let _opt = SGD::new(0.1);
 
     // Do a forward/backward to create gradients
     let x: Tensor<MyAutodiffBackend, 2> = Tensor::random([4, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
@@ -303,8 +301,7 @@ fn test_epoch_train() {
         (x.narrow(0, 8, 3), y.narrow(0, 8, 3)),
     ];
 
-    let params: Vec<Tensor<MyAutodiffBackend, 2>> = vec![layer.weight.val().clone()];
-    let mut opt = SGD::new(params, 0.1);
+    let mut opt = SGD::new(0.1);
 
     let model_fn = |input: Tensor<MyAutodiffBackend, 2>| -> Tensor<MyAutodiffBackend, 2> { layer.forward(input) };
 
@@ -574,11 +571,10 @@ fn test_linear_output_nonzero() {
 
 #[test]
 fn test_sgd_moves_in_gradient_direction() {
-    let layer = Linear::new(4, 3, &DEVICE);
+    let mut layer = Linear::new(4, 3, &DEVICE);
     let _w_before: Vec<f32> = layer.weight.val().clone().into_data().to_vec().unwrap();
 
-    let params: Vec<Tensor<MyAutodiffBackend, 2>> = vec![layer.weight.val().clone()];
-    let mut opt = SGD::new(params, 0.1);
+    let mut opt = SGD::new(0.1);
 
     let x: Tensor<MyAutodiffBackend, 2> = Tensor::from_data(
         TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]),
@@ -590,7 +586,7 @@ fn test_sgd_moves_in_gradient_direction() {
     let loss = cross_entropy_loss(logits, y);
     let loss_val: f32 = loss.clone().into_scalar();
     let grads = loss.backward();
-    opt.step(&grads);
+    opt.step(std::slice::from_mut(&mut layer.weight), &grads);
 
     // After one step, loss should decrease on the same input
     let x2: Tensor<MyAutodiffBackend, 2> = Tensor::from_data(
@@ -644,8 +640,7 @@ fn test_epoch_loss_decreases_with_training() {
 
     let (loss_before, _) = epoch(&model_fn, &loader, None);
 
-    let params: Vec<Tensor<MyAutodiffBackend, 2>> = vec![layer.weight.val().clone()];
-    let mut opt = SGD::new(params, 0.1);
+    let mut opt = SGD::new(0.1);
 
     // Run several training epochs
     for _ in 0..5 {
