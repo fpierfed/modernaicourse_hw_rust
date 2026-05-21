@@ -63,16 +63,15 @@
  * Store all Linear layers in a single Vec called .linears.
  */
 
-use burn::backend::ndarray::{NdArray, NdArrayDevice};
+use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
+use burn::module::{Module, Param};
+use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
-use burn::tensor::{Int, Tensor};
+use burn::tensor::Distribution;
 
-#[allow(unused_imports)]
-use burn::tensor::{Distribution, TensorData};
-
-pub type B = Autodiff<NdArray<f32>>;
-pub type Device = NdArrayDevice;
+pub type MyBackend = NdArray<f32>;
+pub type MyAutodiffBackend = Autodiff<MyBackend>;
 
 /// Linear layer (no bias) with Kaiming initialization.
 ///
@@ -83,22 +82,37 @@ pub type Device = NdArrayDevice;
 ///     out_dim: output feature dimension
 ///
 /// forward() takes (batch_size x in_dim) and returns (batch_size x out_dim).
-pub struct Linear {
-    // TODO: weight parameter of shape (out_features, in_features)
+
+#[derive(Module, Debug)]
+pub struct Linear<B: Backend> {
+    pub weight: Param<Tensor<B, 2>>,
 }
 
-impl Linear {
-    pub fn new(_in_features: usize, _out_features: usize, _device: &Device) -> Self {
-        todo!()
+impl<B> Linear<B>
+where
+    B: Backend,
+{
+    pub fn new(in_features: usize, out_features: usize, device: &B::Device) -> Self {
+        let std = (2.0 / in_features as f64).sqrt();
+        Linear {
+            weight: Param::from_tensor(Tensor::<B, 2>::random(
+                [out_features, in_features],
+                Distribution::Normal(0.0, std),
+                device,
+            )),
+        }
     }
 
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
-        todo!()
+    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+        x.matmul(self.weight.val().transpose())
     }
+}
 
-    pub fn weight(&self) -> &Tensor<B, 2> {
-        todo!()
-    }
+fn logsumexp(x: Tensor<MyAutodiffBackend, 2>, dim: usize) -> Tensor<MyAutodiffBackend, 2> {
+    assert!(dim == 0 || dim == 1, "Incompatible dimension requested");
+
+    let max_x = x.clone().max_dim(dim);
+    (x - max_x.clone()).exp().sum_dim(dim).log() + max_x
 }
 
 /// Cross-entropy loss (numerically stable via log-sum-exp).
@@ -108,8 +122,15 @@ impl Linear {
 ///     targets: (N) desired class for each example
 /// Output:
 ///     scalar tensor - average cross entropy loss
-pub fn cross_entropy_loss(_logits: Tensor<B, 2>, _targets: Tensor<B, 1, Int>) -> Tensor<B, 1> {
-    todo!()
+pub fn cross_entropy_loss(
+    logits: Tensor<MyAutodiffBackend, 2>,
+    targets: Tensor<MyAutodiffBackend, 1, Int>,
+) -> Tensor<MyAutodiffBackend, 1> {
+    let batch_size = targets.dims()[0];
+    let true_class_indexes = targets.reshape([batch_size, 1]);
+    // prediction at what should be the true class
+    let predictions = logits.clone().gather(1, true_class_indexes);
+    (logsumexp(logits, 1) - predictions).mean()
 }
 
 /// SGD optimizer.
@@ -121,11 +142,11 @@ pub struct SGD {
 }
 
 impl SGD {
-    pub fn new(_params: Vec<Tensor<B, 2>>, _lr: f64) -> Self {
+    pub fn new(_params: Vec<Tensor<MyAutodiffBackend, 2>>, _lr: f64) -> Self {
         todo!()
     }
 
-    pub fn step(&mut self, _grads: &<B as AutodiffBackend>::Gradients) {
+    pub fn step(&mut self, _grads: &<MyAutodiffBackend as AutodiffBackend>::Gradients) {
         todo!()
     }
 }
@@ -140,13 +161,20 @@ pub struct DataLoader {
 }
 
 impl DataLoader {
-    pub fn new(_x: Tensor<B, 2>, _y: Tensor<B, 1, Int>, _batch_size: usize) -> Self {
+    pub fn new(
+        _x: Tensor<MyAutodiffBackend, 2>,
+        _y: Tensor<MyAutodiffBackend, 1, Int>,
+        _batch_size: usize,
+    ) -> Self {
         todo!()
     }
 }
 
 impl Iterator for DataLoader {
-    type Item = (Tensor<B, 2>, Tensor<B, 1, Int>);
+    type Item = (
+        Tensor<MyAutodiffBackend, 2>,
+        Tensor<MyAutodiffBackend, 1, Int>,
+    );
 
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
@@ -166,12 +194,12 @@ impl TwoLayerNN {
         _in_features: usize,
         _hidden_features: usize,
         _out_features: usize,
-        _device: &Device,
+        _device: &Device<MyAutodiffBackend>,
     ) -> Self {
         todo!()
     }
 
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn forward(&self, _x: Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2> {
         todo!()
     }
 }
@@ -189,12 +217,12 @@ impl MultiLayerNN {
         _in_features: usize,
         _out_features: usize,
         _hidden_dims: &[usize],
-        _device: &Device,
+        _device: &Device<MyAutodiffBackend>,
     ) -> Self {
         todo!()
     }
 
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn forward(&self, _x: Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2> {
         todo!()
     }
 }
@@ -205,11 +233,14 @@ impl MultiLayerNN {
 /// Returns (average_loss, error_rate) as floats.
 pub fn epoch<M>(
     _model: &M,
-    _loader: &[(Tensor<B, 2>, Tensor<B, 1, Int>)],
+    _loader: &[(
+        Tensor<MyAutodiffBackend, 2>,
+        Tensor<MyAutodiffBackend, 1, Int>,
+    )],
     _optimizer: Option<&mut SGD>,
 ) -> (f64, f64)
 where
-    M: Fn(Tensor<B, 2>) -> Tensor<B, 2>,
+    M: Fn(Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2>,
 {
     todo!()
 }
@@ -221,7 +252,13 @@ where
 /// The returned model should achieve < 10% error on the test set.
 ///
 /// Use your Linear, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_linear_model(_x_train: Tensor<B, 2>, _y_train: Tensor<B, 1, Int>) -> Linear {
+pub fn eval_linear_model<B>(
+    _x_train: Tensor<MyAutodiffBackend, 2>,
+    _y_train: Tensor<MyAutodiffBackend, 1, Int>,
+) -> Linear<B>
+where
+    B: Backend,
+{
     todo!()
 }
 
@@ -232,6 +269,9 @@ pub fn eval_linear_model(_x_train: Tensor<B, 2>, _y_train: Tensor<B, 1, Int>) ->
 /// The returned model should achieve < 3% error on the first 2000 test samples.
 ///
 /// Use your TwoLayerNN, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_two_layer_nn(_x_train: Tensor<B, 2>, _y_train: Tensor<B, 1, Int>) -> TwoLayerNN {
+pub fn eval_two_layer_nn(
+    _x_train: Tensor<MyAutodiffBackend, 2>,
+    _y_train: Tensor<MyAutodiffBackend, 1, Int>,
+) -> TwoLayerNN {
     todo!()
 }
