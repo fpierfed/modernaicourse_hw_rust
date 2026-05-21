@@ -92,11 +92,11 @@ impl<B> Linear<B>
 where
     B: Backend,
 {
-    pub fn new(in_features: usize, out_features: usize, device: &B::Device) -> Self {
-        let std = (2.0 / in_features as f64).sqrt();
+    pub fn new(in_dim: usize, out_dim: usize, device: &B::Device) -> Self {
+        let std = (2.0 / in_dim as f64).sqrt();
         Linear {
             weight: Param::from_tensor(Tensor::<B, 2>::random(
-                [out_features, in_features],
+                [out_dim, in_dim],
                 Distribution::Normal(0.0, std),
                 device,
             )),
