@@ -13,3 +13,4 @@ rand = { workspace = true }
 rand_distr = { workspace = true }
 flate2 = { workspace = true }
 reqwest = { workspace = true }
+test-support = { path = "../test_support" }

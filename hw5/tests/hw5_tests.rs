@@ -2,6 +2,128 @@ use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
+use test_support::{as_f32_vec, assert_f32_close, assert_f32_slice_close, json, python_json};
+
+fn torch_linear(
+    x: Vec<f32>,
+    x_shape: Vec<usize>,
+    weight: Vec<f32>,
+    weight_shape: Vec<usize>,
+) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn.functional as F
+
+d = json.load(sys.stdin)
+x = torch.tensor(d["x"], dtype=torch.float32).reshape(d["x_shape"])
+w = torch.tensor(d["weight"], dtype=torch.float32).reshape(d["weight_shape"])
+json.dump(F.linear(x, w).flatten().tolist(), sys.stdout)
+"#,
+        json!({ "x": x, "x_shape": x_shape, "weight": weight, "weight_shape": weight_shape }),
+    ))
+}
+
+fn torch_silu(x: Vec<f32>, shape: Vec<usize>) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn.functional as F
+
+d = json.load(sys.stdin)
+x = torch.tensor(d["x"], dtype=torch.float32).reshape(d["shape"])
+json.dump(F.silu(x).flatten().tolist(), sys.stdout)
+"#,
+        json!({ "x": x, "shape": shape }),
+    ))
+}
+
+fn torch_rms_norm(x: Vec<f32>, shape: Vec<usize>, eps: f64) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn.functional as F
+
+d = json.load(sys.stdin)
+x = torch.tensor(d["x"], dtype=torch.float32).reshape(d["shape"])
+out = F.rms_norm(x, (x.shape[-1],), eps=d["eps"])
+json.dump(out.flatten().tolist(), sys.stdout)
+"#,
+        json!({ "x": x, "shape": shape, "eps": eps }),
+    ))
+}
+
+fn torch_attention(
+    q: Vec<f32>,
+    q_shape: Vec<usize>,
+    k: Vec<f32>,
+    k_shape: Vec<usize>,
+    v: Vec<f32>,
+    v_shape: Vec<usize>,
+    mask_len: Option<usize>,
+) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn.functional as F
+
+d = json.load(sys.stdin)
+q = torch.tensor(d["q"], dtype=torch.float32).reshape(d["q_shape"])
+k = torch.tensor(d["k"], dtype=torch.float32).reshape(d["k_shape"])
+v = torch.tensor(d["v"], dtype=torch.float32).reshape(d["v_shape"])
+mask = None
+if d["mask_len"] is not None:
+    length = d["mask_len"]
+    mask = torch.triu(torch.full((length, length), float("-inf")), diagonal=1)
+if q.ndim == 2:
+    out = F.scaled_dot_product_attention(
+        q.unsqueeze(0).unsqueeze(0),
+        k.unsqueeze(0).unsqueeze(0),
+        v.unsqueeze(0).unsqueeze(0),
+        attn_mask=mask,
+        dropout_p=0.0,
+    )[0, 0]
+else:
+    out = F.scaled_dot_product_attention(q, k, v, attn_mask=mask, dropout_p=0.0)
+json.dump(out.flatten().tolist(), sys.stdout)
+"#,
+        json!({
+            "q": q,
+            "q_shape": q_shape,
+            "k": k,
+            "k_shape": k_shape,
+            "v": v,
+            "v_shape": v_shape,
+            "mask_len": mask_len,
+        }),
+    ))
+}
+
+fn torch_cross_entropy(logits: Vec<f32>, shape: Vec<usize>, targets: Vec<i32>) -> f32 {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn.functional as F
+
+d = json.load(sys.stdin)
+logits = torch.tensor(d["logits"], dtype=torch.float32).reshape(d["shape"])
+targets = torch.tensor(d["targets"], dtype=torch.long).reshape(d["shape"][:-1])
+loss = F.cross_entropy(logits.reshape(-1, logits.shape[-1]), targets.reshape(-1))
+json.dump([float(loss)], sys.stdout)
+"#,
+        json!({ "logits": logits, "shape": shape, "targets": targets }),
+    ))[0]
+}
 
 fn causal_mask(length: usize) -> Tensor<B, 2> {
     let mut data = vec![0.0f32; length * length];
@@ -176,10 +298,14 @@ fn test_linear() {
     let out = layer.forward(x.clone());
     assert_eq!(out.dims(), [50, 20]);
 
-    // Correctness: output == X @ W^T
-    let expected = x.matmul(layer.weight().clone().transpose());
-    let diff: f32 = out.sub(expected).abs().sum().into_scalar();
-    assert!(diff < 1e-4);
+    let expected = torch_linear(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+        layer.weight().clone().into_data().to_vec::<f32>().unwrap(),
+        layer.weight().dims().to_vec(),
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-4);
 
     // Batch dims
     let x: Tensor<B, 3> = Tensor::random([7, 9, 10], Distribution::Normal(0.0, 1.0), &DEVICE);
@@ -254,11 +380,12 @@ fn test_embedding_std_init() {
 fn test_silu() {
     let x: Tensor<B, 2> = Tensor::random([10, 20], Distribution::Normal(0.0, 1.0), &DEVICE);
     let out = silu(x.clone());
-    // silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
-    let sigmoid = x.clone().neg().exp().add_scalar(1.0).recip();
-    let expected = x.clone().mul(sigmoid);
-    let diff: f32 = out.sub(expected).abs().max().into_scalar();
-    assert!(diff < 1e-6);
+    let expected = torch_silu(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-6);
 
     // Multi-dim
     let x: Tensor<B, 4> = Tensor::random([3, 4, 5, 6], Distribution::Normal(0.0, 1.0), &DEVICE);
@@ -274,21 +401,13 @@ fn test_rms_norm() {
     );
     let out = rms_norm(x.clone(), 1e-5);
 
-    // Manual: row 0 rms = sqrt((1+1+0.25+0.25)/4) = sqrt(0.625)
-    let x_data: Vec<f32> = x.into_data().to_vec::<f32>().unwrap();
-    let out_data: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    for row in 0..2 {
-        let row_slice = &x_data[row * 4..(row + 1) * 4];
-        let mean_sq: f32 = row_slice.iter().map(|v| v * v).sum::<f32>() / 4.0;
-        let rms = (mean_sq + 1e-5f32).sqrt();
-        for col in 0..4 {
-            let expected = row_slice[col] / rms;
-            assert!(
-                (out_data[row * 4 + col] - expected).abs() < 1e-5,
-                "rms_norm mismatch at [{row}][{col}]"
-            );
-        }
-    }
+    let expected = torch_rms_norm(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+        1e-5,
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-5);
 
     // Batch dims
     let x: Tensor<B, 3> = Tensor::random([10, 7, 20], Distribution::Normal(0.0, 1.0), &DEVICE);
@@ -302,8 +421,19 @@ fn test_self_attention_causal() {
     let k: Tensor<B, 2> = Tensor::random([5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
     let v: Tensor<B, 2> = Tensor::random([5, 6], Distribution::Normal(0.0, 1.0), &DEVICE);
     let mask = causal_mask(5);
-    let out = self_attention(q, k, v.clone(), Some(mask));
+    let out = self_attention(q.clone(), k.clone(), v.clone(), Some(mask));
     assert_eq!(out.dims(), [5, 6]);
+    let expected = torch_attention(
+        q.clone().into_data().to_vec::<f32>().unwrap(),
+        q.dims().to_vec(),
+        k.clone().into_data().to_vec::<f32>().unwrap(),
+        k.dims().to_vec(),
+        v.clone().into_data().to_vec::<f32>().unwrap(),
+        v.dims().to_vec(),
+        Some(q.dims()[0]),
+    );
+    let actual = out.clone().into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-5);
 
     // First row with causal mask: only attends to position 0, so output = V[0]
     let out_row0: Vec<f32> = out
@@ -329,8 +459,19 @@ fn test_self_attention_batched() {
     let k: Tensor<B, 4> = Tensor::random([2, 3, 5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
     let v: Tensor<B, 4> = Tensor::random([2, 3, 5, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
     let mask = causal_mask(5);
-    let out = self_attention(q, k, v, Some(mask));
+    let out = self_attention(q.clone(), k.clone(), v.clone(), Some(mask));
     assert_eq!(out.dims(), [2, 3, 5, 4]);
+    let expected = torch_attention(
+        q.clone().into_data().to_vec::<f32>().unwrap(),
+        q.dims().to_vec(),
+        k.clone().into_data().to_vec::<f32>().unwrap(),
+        k.dims().to_vec(),
+        v.clone().into_data().to_vec::<f32>().unwrap(),
+        v.dims().to_vec(),
+        Some(q.dims()[2]),
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-5);
 }
 
 #[test]
@@ -441,14 +582,16 @@ fn test_llm() {
 
 #[test]
 fn test_cross_entropy_loss_2d() {
-    let logits: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![2.0f32, 1.0, 0.0, 0.0, 2.0, 1.0], [2, 3]),
-        &DEVICE,
-    );
-    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 2]), &DEVICE);
+    let logits_data = vec![2.0f32, 1.0, 0.0, 0.0, 2.0, 1.0];
+    let targets = vec![0i32, 2];
+    let shape = [2, 3];
+    let logits: Tensor<B, 2> =
+        Tensor::from_data(TensorData::new(logits_data.clone(), shape), &DEVICE);
+    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from(targets.as_slice()), &DEVICE);
     let loss = cross_entropy_loss(logits, y);
     let val: f32 = loss.into_scalar();
-    assert!((val - 0.907_606).abs() < 1e-5);
+    let expected = torch_cross_entropy(logits_data, shape.to_vec(), targets);
+    assert_f32_close(val, expected, 1e-5);
 }
 
 #[test]
@@ -458,11 +601,17 @@ fn test_cross_entropy_loss_3d() {
     let y_data: Vec<i32> = (0..20).map(|i| i % 7).collect();
     let y: Tensor<B, 2, Int> = Tensor::from_data(TensorData::new(y_data, [4, 5]), &DEVICE);
     // Reshape logits to (20, 7) and targets to (20) for cross_entropy_loss
-    let logits_flat: Tensor<B, 2> = logits.reshape([20, 7]);
+    let logits_flat: Tensor<B, 2> = logits.clone().reshape([20, 7]);
     let y_flat: Tensor<B, 1, Int> = y.reshape([20]);
     let loss = cross_entropy_loss(logits_flat, y_flat);
     let val: f32 = loss.into_scalar();
+    let expected = torch_cross_entropy(
+        logits.clone().into_data().to_vec::<f32>().unwrap(),
+        logits.dims().to_vec(),
+        (0..20).map(|i| i % 7).collect(),
+    );
     assert!(val.is_finite() && val > 0.0);
+    assert_f32_close(val, expected, 1e-5);
 }
 
 #[test]
@@ -846,11 +995,12 @@ fn test_silu_matches_formula() {
         &DEVICE,
     );
     let out = silu(x.clone());
-    // silu(x) = x * sigmoid(x) = x / (1 + exp(-x))
-    let sigmoid = (x.clone().neg().exp() + 1.0).powf_scalar(-1.0);
-    let expected = x * sigmoid;
-    let diff: f32 = (out - expected).abs().sum().into_scalar();
-    assert!(diff < 1e-5, "silu should match x*sigmoid(x), diff={diff}");
+    let expected = torch_silu(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-5);
 }
 
 #[test]
@@ -880,7 +1030,10 @@ fn test_cross_entropy_loss_hw5_stable() {
     );
     let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 0]), &DEVICE);
     let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
-    assert!(loss.is_finite(), "cross_entropy_loss must be stable for large logits");
+    assert!(
+        loss.is_finite(),
+        "cross_entropy_loss must be stable for large logits"
+    );
     assert!(loss >= 0.0);
 }
 
@@ -892,10 +1045,8 @@ fn test_adam_converges_faster_than_random() {
     let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8);
 
     let x: Tensor<B, 2> = Tensor::random([8, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let y: Tensor<B, 1, Int> = Tensor::from_data(
-        TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1]),
-        &DEVICE,
-    );
+    let y: Tensor<B, 1, Int> =
+        Tensor::from_data(TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1]), &DEVICE);
 
     let logits = layer.forward(x.clone());
     let loss_before: f32 = cross_entropy_loss(logits, y.clone()).into_scalar();
@@ -910,5 +1061,8 @@ fn test_adam_converges_faster_than_random() {
 
     let logits = layer.forward(x);
     let loss_after: f32 = cross_entropy_loss(logits, y).into_scalar();
-    assert!(loss_after < loss_before, "Adam should reduce loss: before={loss_before}, after={loss_after}");
+    assert!(
+        loss_after < loss_before,
+        "Adam should reduce loss: before={loss_before}, after={loss_after}"
+    );
 }

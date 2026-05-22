@@ -254,11 +254,14 @@ fn test_grade_responses() {
     }
     let tokens = Tensor::<B, 2, Int>::from_data(TensorData::new(data, [3, max_len]), &DEVICE);
 
-    let scores = grade_responses(&char_decode, tokens, 9, 1.0, 0.2);
+    let correct_weight = 1.0;
+    let format_weight = 0.2;
+    let scores = grade_responses(&char_decode, tokens, 9, correct_weight, format_weight);
     assert_eq!(scores.len(), 3);
-    assert!((scores[0] - 1.2).abs() < 1e-6);
-    assert!((scores[1] - 0.2).abs() < 1e-6);
-    assert!((scores[2] - 0.0).abs() < 1e-6);
+    let expected = [correct_weight + format_weight, format_weight, 0.0];
+    for (actual, expected) in scores.iter().zip(expected) {
+        assert!((actual - expected).abs() < 1e-6);
+    }
 }
 
 // ============================================================
@@ -404,41 +407,51 @@ fn test_extract_answer_whitespace() {
 
 #[test]
 fn test_grade_responses_all_correct() {
-    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
-        TensorData::new(vec![0i32; 6], [2, 3]),
-        &DEVICE,
-    );
+    let tokens: Tensor<B, 2, Int> =
+        Tensor::from_data(TensorData::new(vec![0i32; 6], [2, 3]), &DEVICE);
     let decode_fn = |_: &[u32]| -> String { "<ANSWER>42</ANSWER>".to_string() };
-    let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
+    let correct_weight = 1.0;
+    let format_weight = 0.5;
+    let scores = grade_responses(&decode_fn, tokens, 42, correct_weight, format_weight);
     // Both completions are correct and formatted
     for s in &scores {
-        assert!(*s >= 1.5 - 1e-6, "Correct + formatted should score >= 1.5, got {s}");
+        let expected = correct_weight + format_weight;
+        assert!(
+            *s >= expected - 1e-6,
+            "Correct + formatted should score >= {expected}, got {s}"
+        );
     }
 }
 
 #[test]
 fn test_grade_responses_all_wrong() {
-    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
-        TensorData::new(vec![0i32; 6], [2, 3]),
-        &DEVICE,
-    );
+    let tokens: Tensor<B, 2, Int> =
+        Tensor::from_data(TensorData::new(vec![0i32; 6], [2, 3]), &DEVICE);
     let decode_fn = |_: &[u32]| -> String { "<ANSWER>99</ANSWER>".to_string() };
-    let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
+    let correct_weight = 1.0;
+    let format_weight = 0.5;
+    let scores = grade_responses(&decode_fn, tokens, 42, correct_weight, format_weight);
     // Wrong answer but formatted
     for s in &scores {
-        assert!((*s - 0.5).abs() < 1e-6, "Wrong but formatted should score 0.5, got {s}");
+        assert!(
+            (*s - format_weight).abs() < 1e-6,
+            "Wrong but formatted should score {format_weight}, got {s}"
+        );
     }
 }
 
 #[test]
 fn test_grade_responses_no_answer_tag() {
-    let tokens: Tensor<B, 2, Int> = Tensor::from_data(
-        TensorData::new(vec![0i32; 3], [1, 3]),
-        &DEVICE,
-    );
+    let tokens: Tensor<B, 2, Int> =
+        Tensor::from_data(TensorData::new(vec![0i32; 3], [1, 3]), &DEVICE);
     let decode_fn = |_: &[u32]| -> String { "no answer here".to_string() };
     let scores = grade_responses(&decode_fn, tokens, 42, 1.0, 0.5);
-    assert!((scores[0] - 0.0).abs() < 1e-6, "No answer tag should score 0, got {}", scores[0]);
+    let expected = 0.0;
+    assert!(
+        (scores[0] - expected).abs() < 1e-6,
+        "No answer tag should score {expected}, got {}",
+        scores[0]
+    );
 }
 
 #[test]
@@ -458,26 +471,28 @@ fn test_convert_gsm8k_multiple_tools() {
 fn test_get_loss_mask_consecutive_tools() {
     let specials = special_tokens();
     // <THINK> text <TOOL>x</TOOL><RESPONSE>y</RESPONSE><TOOL>z</TOOL><RESPONSE>w</RESPONSE> </THINK><ANSWER>a</ANSWER>
-    let tokens: Vec<u32> = vec![93, 1, 95, 2, 96, 97, 3, 98, 95, 4, 96, 97, 5, 98, 94, 99, 6, 100];
+    let tokens: Vec<u32> = vec![
+        93, 1, 95, 2, 96, 97, 3, 98, 95, 4, 96, 97, 5, 98, 94, 99, 6, 100,
+    ];
     let mask = get_loss_mask(&tokens, &specials);
     // After <THINK>: true
-    assert!(mask[1]);  // 1 (after THINK)
-    assert!(mask[2]);  // <TOOL>
-    assert!(mask[3]);  // 2
-    assert!(mask[4]);  // </TOOL>
-    // After </TOOL>: false (tool response)
+    assert!(mask[1]); // 1 (after THINK)
+    assert!(mask[2]); // <TOOL>
+    assert!(mask[3]); // 2
+    assert!(mask[4]); // </TOOL>
+                      // After </TOOL>: false (tool response)
     assert!(!mask[5]); // <RESPONSE>
     assert!(!mask[6]); // 3
     assert!(!mask[7]); // </RESPONSE>
-    // After </RESPONSE>: true again
-    assert!(mask[8]);  // <TOOL>
-    assert!(mask[9]);  // 4
+                       // After </RESPONSE>: true again
+    assert!(mask[8]); // <TOOL>
+    assert!(mask[9]); // 4
     assert!(mask[10]); // </TOOL>
-    // After second </TOOL>: false
+                       // After second </TOOL>: false
     assert!(!mask[11]); // <RESPONSE>
     assert!(!mask[12]); // 5
     assert!(!mask[13]); // </RESPONSE>
-    // After </RESPONSE>: true
+                        // After </RESPONSE>: true
     assert!(mask[14]); // </THINK>
     assert!(mask[15]); // <ANSWER>
     assert!(mask[16]); // 6

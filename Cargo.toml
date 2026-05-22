@@ -1,5 +1,5 @@
 [workspace]
-members = ["hw0", "hw1", "hw2", "hw3", "hw4", "hw5", "hw6", "hw7"]
+members = ["hw0", "hw1", "hw2", "hw3", "hw4", "hw5", "hw6", "hw7", "test_support"]
 resolver = "2"
 
 [workspace.dependencies]

@@ -7,3 +7,4 @@ edition = "2021"
 
 [dev-dependencies]
 approx = { workspace = true }
+test-support = { path = "../test_support" }

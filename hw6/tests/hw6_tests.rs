@@ -1,9 +1,44 @@
 use burn::backend::ndarray::NdArrayDevice;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use hw6::*;
+use test_support::{as_f32_vec, assert_f32_close, assert_f32_slice_close, json, python_json};
 
 #[allow(unused)]
 const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
+
+fn torch_log_probs(logits: Vec<f32>, shape: [usize; 3], y: Vec<i32>, mask: Vec<f32>) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+
+d = json.load(sys.stdin)
+logits = torch.tensor(d["logits"], dtype=torch.float32).reshape(d["shape"])
+y = torch.tensor(d["y"], dtype=torch.long).reshape(d["shape"][:2])
+mask = torch.tensor(d["mask"], dtype=torch.bool).reshape(d["shape"][:2])
+logp = logits.log_softmax(dim=-1).gather(-1, y.unsqueeze(-1)).squeeze(-1)
+json.dump((logp * mask).sum(dim=1).tolist(), sys.stdout)
+"#,
+        json!({ "logits": logits, "shape": shape, "y": y, "mask": mask }),
+    ))
+}
+
+fn torch_softplus(x: Vec<f32>, beta: f64) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+
+d = json.load(sys.stdin)
+x = torch.tensor(d["x"], dtype=torch.float32)
+out = torch.logaddexp(torch.zeros_like(x), x * d["beta"])
+json.dump(out.tolist(), sys.stdout)
+"#,
+        json!({ "x": x, "beta": beta }),
+    ))
+}
 
 // ============================================================
 // Part I: Chat Format and SFT
@@ -188,53 +223,34 @@ fn test_train_chat_sft() {
 
 #[test]
 fn test_log_probs() {
-    let logits = Tensor::<B, 3>::from_data(
-        TensorData::new(
-            vec![
-                2.0f32, 0.0, -1.0, 0.5, 1.5, -0.5, 1.0, -1.0, 0.0, -0.5, 1.0, 0.0, 2.0, 0.0, -2.0,
-                0.25, 0.25, 0.25,
-            ],
-            [2, 3, 3],
-        ),
-        &DEVICE,
-    );
-    let y =
-        Tensor::<B, 2, Int>::from_data(TensorData::new(vec![0i32, 1, 2, 1, 0, 2], [2, 3]), &DEVICE);
-    let mask = Tensor::<B, 2>::from_data(
-        TensorData::new(vec![1.0f32, 0.0, 1.0, 1.0, 1.0, 0.0], [2, 3]),
-        &DEVICE,
-    );
+    let logits_data = vec![
+        2.0f32, 0.0, -1.0, 0.5, 1.5, -0.5, 1.0, -1.0, 0.0, -0.5, 1.0, 0.0, 2.0, 0.0, -2.0, 0.25,
+        0.25, 0.25,
+    ];
+    let y_data = vec![0i32, 1, 2, 1, 0, 2];
+    let mask_data = vec![1.0f32, 0.0, 1.0, 1.0, 1.0, 0.0];
+    let logits =
+        Tensor::<B, 3>::from_data(TensorData::new(logits_data.clone(), [2, 3, 3]), &DEVICE);
+    let y = Tensor::<B, 2, Int>::from_data(TensorData::new(y_data.clone(), [2, 3]), &DEVICE);
+    let mask = Tensor::<B, 2>::from_data(TensorData::new(mask_data.clone(), [2, 3]), &DEVICE);
 
     let out = log_probs(logits, y, mask);
     assert_eq!(out.dims(), [2]);
 
     let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    // Expected ~ [-1.5775, -0.6073] from Python reference
-    assert!(
-        (vals[0] - (-1.5775)).abs() < 1e-3,
-        "log_probs[0] = {}, expected ~ -1.5775",
-        vals[0]
-    );
-    assert!(
-        (vals[1] - (-0.6073)).abs() < 1e-3,
-        "log_probs[1] = {}, expected ~ -0.6073",
-        vals[1]
-    );
+    let expected = torch_log_probs(logits_data, [2, 3, 3], y_data, mask_data);
+    assert_f32_slice_close(&vals, &expected, 1e-4);
 }
 
 #[test]
 fn test_softplus() {
-    let x = Tensor::<B, 1>::from_data(TensorData::from([-3.0f32, -0.5, 0.0, 2.0]), &DEVICE);
-    let out = softplus(x, 0.7);
-    #[allow(clippy::approx_constant)]
-    let expected = [0.1155f32, 0.5334, 0.6931, 1.6204];
+    let x_data = vec![-3.0f32, -0.5, 0.0, 2.0];
+    let beta = 0.7;
+    let x = Tensor::<B, 1>::from_data(TensorData::from(x_data.as_slice()), &DEVICE);
+    let out = softplus(x, beta);
+    let expected = torch_softplus(x_data, beta);
     let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    for (a, e) in vals.iter().zip(expected.iter()) {
-        assert!(
-            (a - e).abs() < 1e-3,
-            "softplus mismatch: got {a}, expected {e}"
-        );
-    }
+    assert_f32_slice_close(&vals, &expected, 1e-4);
 }
 
 #[test]
@@ -242,12 +258,11 @@ fn test_softplus_2d() {
     // Test softplus on a flattened view (burn requires matching dimensions)
     let x_data = [1.0f32, -1.0, 0.25, -0.25];
     let x = Tensor::<B, 1>::from_data(TensorData::from(x_data.as_slice()), &DEVICE);
-    let out = softplus(x, 0.3);
+    let beta = 0.3;
+    let out = softplus(x, beta);
     let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    for (v, xv) in vals.iter().zip(x_data.iter()) {
-        let expected = (1.0 + (0.3 * xv).exp()).ln();
-        assert!((v - expected).abs() < 1e-5, "softplus 2D mismatch");
-    }
+    let expected = torch_softplus(x_data.to_vec(), beta);
+    assert_f32_slice_close(&vals, &expected, 1e-5);
 }
 
 #[test]
@@ -278,6 +293,8 @@ fn test_dpo_loss_shape() {
     let loss = dpo_loss(&model, &model_ref, xp, yp, maskp, xn, yn, maskn, 0.3);
     assert_eq!(loss.dims(), [2]);
     let vals: Vec<f32> = loss.into_data().to_vec::<f32>().unwrap();
+    let expected = torch_softplus(vec![0.0; vals.len()], 0.3);
+    assert_f32_slice_close(&vals, &expected, 1e-5);
     for v in &vals {
         assert!(v.is_finite(), "DPO loss is not finite");
         assert!(
@@ -427,52 +444,56 @@ fn test_get_loss_mask_empty_assistant() {
     assert!(!mask[1]);
     assert!(!mask[2]);
     assert!(!mask[3]); // assistant_start itself
-    assert!(mask[4]);  // assistant_end (included)
+    assert!(mask[4]); // assistant_end (included)
     assert!(!mask[5]);
 }
 
 #[test]
 fn test_softplus_large_negative() {
-    // softplus(x, beta) ≈ 0 for very negative x
-    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([-100.0f32]), &DEVICE);
-    let out: f32 = softplus(x, 1.0).into_scalar();
+    let x_data = vec![-100.0f32];
+    let beta = 1.0;
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from(x_data.as_slice()), &DEVICE);
+    let out: f32 = softplus(x, beta).into_scalar();
+    let expected = torch_softplus(x_data, beta)[0];
     assert!(out.is_finite());
-    assert!(out.abs() < 1e-5, "softplus(-100) should be ≈ 0, got {out}");
+    assert_f32_close(out, expected, 1e-5);
 }
 
 #[test]
 fn test_softplus_large_positive() {
-    // softplus(x, beta) ≈ beta*x for very positive x
-    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([100.0f32]), &DEVICE);
+    let x_data = vec![100.0f32];
     let beta = 0.5;
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from(x_data.as_slice()), &DEVICE);
     let out: f32 = softplus(x, beta).into_scalar();
+    let expected = torch_softplus(x_data, beta)[0];
     assert!(out.is_finite());
-    assert!((out - 50.0).abs() < 1e-3, "softplus(100, 0.5) should be ≈ 50, got {out}");
+    assert_f32_close(out, expected, 1e-3);
 }
 
 #[test]
 fn test_softplus_at_zero() {
-    // softplus(0, 1) = log(1 + exp(0)) = log(2) ≈ 0.6931
-    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from([0.0f32]), &DEVICE);
-    let out: f32 = softplus(x, 1.0).into_scalar();
-    assert!((out - std::f32::consts::LN_2).abs() < 1e-3, "softplus(0, 1) should be ln(2), got {out}");
+    let x_data = vec![0.0f32];
+    let beta = 1.0;
+    let x: Tensor<B, 1> = Tensor::from_data(TensorData::from(x_data.as_slice()), &DEVICE);
+    let out: f32 = softplus(x, beta).into_scalar();
+    let expected = torch_softplus(x_data, beta)[0];
+    assert_f32_close(out, expected, 1e-5);
 }
 
 #[test]
 fn test_log_probs_all_masked() {
     // If mask is all zeros, log_probs should be 0 for each batch element
     let logits: Tensor<B, 3> = Tensor::random([2, 3, 5], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let y: Tensor<B, 2, Int> = Tensor::from_data(
-        TensorData::new(vec![0i32, 1, 2, 3, 4, 0], [2, 3]),
-        &DEVICE,
-    );
-    let mask: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![0.0f32; 6], [2, 3]),
-        &DEVICE,
-    );
+    let y: Tensor<B, 2, Int> =
+        Tensor::from_data(TensorData::new(vec![0i32, 1, 2, 3, 4, 0], [2, 3]), &DEVICE);
+    let mask: Tensor<B, 2> = Tensor::from_data(TensorData::new(vec![0.0f32; 6], [2, 3]), &DEVICE);
     let lp = log_probs(logits, y, mask);
     let vals: Vec<f32> = lp.into_data().to_vec().unwrap();
-    for v in &vals {
-        assert!(v.abs() < 1e-6, "All-masked log_probs should be 0, got {v}");
-    }
+    let expected = torch_log_probs(
+        vec![0.0; 2 * 3 * 5],
+        [2, 3, 5],
+        vec![0, 1, 2, 3, 4, 0],
+        vec![0.0; 6],
+    );
+    assert_f32_slice_close(&vals, &expected, 1e-6);
 }

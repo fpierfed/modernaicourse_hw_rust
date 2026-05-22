@@ -3,6 +3,7 @@ use ndarray::{Array1, Array2, Array3, Array4, Ix4};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
 use rand_distr::{Distribution, StandardNormal};
+use test_support::{as_f32_vec, assert_f32_close, json, python_json};
 
 mod mnist {
     use flate2::read::GzDecoder;
@@ -77,7 +78,10 @@ mod mnist {
                 Err(e) => last_err = Some(e),
             }
         }
-        panic!("Failed to download {filename} from all mirrors: {}", last_err.unwrap());
+        panic!(
+            "Failed to download {filename} from all mirrors: {}",
+            last_err.unwrap()
+        );
     }
 
     pub fn load_mnist_zero_one() -> MnistData {
@@ -120,10 +124,6 @@ fn test_classify_zero_one() {
     );
 }
 
-fn reference_matmul(a: &Array2<f32>, b: &Array2<f32>) -> Array2<f32> {
-    a.dot(b)
-}
-
 fn seeded_rng() -> StdRng {
     StdRng::seed_from_u64(0x5eed_5eed)
 }
@@ -144,13 +144,57 @@ fn random_array4(rng: &mut StdRng, shape: (usize, usize, usize, usize)) -> Array
     Array4::from_shape_fn(shape, |_| random_f32(rng))
 }
 
+fn torch_reference(
+    op: &str,
+    a_shape: &[usize],
+    a: Vec<f32>,
+    b_shape: &[usize],
+    b: Vec<f32>,
+) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+
+d = json.load(sys.stdin)
+a = torch.tensor(d["a"], dtype=torch.float32).reshape(d["a_shape"])
+b = torch.tensor(d["b"], dtype=torch.float32).reshape(d["b_shape"])
+
+if d["op"] == "add":
+    out = a + b
+elif d["op"] == "dot":
+    out = torch.dot(a, b).reshape(1)
+elif d["op"] in {"matvec", "vecmat", "matmul", "batch_matmul"}:
+    out = a @ b
+else:
+    raise ValueError(f"unknown op {d['op']}")
+
+json.dump(out.flatten().tolist(), sys.stdout)
+"#,
+        json!({
+            "op": op,
+            "a_shape": a_shape,
+            "a": a,
+            "b_shape": b_shape,
+            "b": b,
+        }),
+    ))
+}
+
 #[test]
 fn test_vector_add() {
     let mut rng = seeded_rng();
     let a = random_array1(&mut rng, 5);
     let b = random_array1(&mut rng, 5);
     let z = vector_add(&a, &b);
-    let expected = &a + &b;
+    let expected = Array1::from(torch_reference(
+        "add",
+        &[a.len()],
+        a.to_vec(),
+        &[b.len()],
+        b.to_vec(),
+    ));
     assert!(z.abs_diff_eq(&expected, 1e-6));
 }
 
@@ -168,8 +212,8 @@ fn test_vector_inner_product() {
     let a = random_array1(&mut rng, 5);
     let b = random_array1(&mut rng, 5);
     let z = vector_inner_product(&a, &b);
-    let expected = a.dot(&b);
-    assert!((z - expected).abs() < 1e-6);
+    let expected = torch_reference("dot", &[a.len()], a.to_vec(), &[b.len()], b.to_vec())[0];
+    assert_f32_close(z, expected, 1e-6);
 }
 
 #[test]
@@ -186,7 +230,13 @@ fn test_matrix_vector_product_1() {
     let a = random_array2(&mut rng, (5, 4));
     let b = random_array1(&mut rng, 4);
     let z = matrix_vector_product_1(&a, &b);
-    let expected = a.dot(&b);
+    let expected = Array1::from(torch_reference(
+        "matvec",
+        a.shape(),
+        a.iter().copied().collect(),
+        &[b.len()],
+        b.to_vec(),
+    ));
     assert!(z.abs_diff_eq(&expected, 1e-5));
 }
 
@@ -204,7 +254,13 @@ fn test_matrix_vector_product_2() {
     let a = random_array2(&mut rng, (5, 4));
     let b = random_array1(&mut rng, 4);
     let z = matrix_vector_product_2(&a, &b);
-    let expected = a.dot(&b);
+    let expected = Array1::from(torch_reference(
+        "matvec",
+        a.shape(),
+        a.iter().copied().collect(),
+        &[b.len()],
+        b.to_vec(),
+    ));
     assert!(z.abs_diff_eq(&expected, 1e-5));
 }
 
@@ -214,7 +270,13 @@ fn test_vector_matrix_product_2() {
     let a = random_array2(&mut rng, (4, 5));
     let b = random_array1(&mut rng, 4);
     let z = vector_matrix_product_2(&b, &a);
-    let expected = b.dot(&a);
+    let expected = Array1::from(torch_reference(
+        "vecmat",
+        &[b.len()],
+        b.to_vec(),
+        a.shape(),
+        a.iter().copied().collect(),
+    ));
     assert!(z.abs_diff_eq(&expected, 1e-5));
 }
 
@@ -232,7 +294,17 @@ fn test_matmul_1() {
     let a = random_array2(&mut rng, (4, 5));
     let b = random_array2(&mut rng, (5, 6));
     let z = matmul_1(&a, &b);
-    let expected = reference_matmul(&a, &b);
+    let expected = Array2::from_shape_vec(
+        (a.shape()[0], b.shape()[1]),
+        torch_reference(
+            "matmul",
+            a.shape(),
+            a.iter().copied().collect(),
+            b.shape(),
+            b.iter().copied().collect(),
+        ),
+    )
+    .unwrap();
     assert!(z.abs_diff_eq(&expected, 1e-4));
 }
 
@@ -250,7 +322,17 @@ fn test_matmul_2() {
     let a = random_array2(&mut rng, (4, 5));
     let b = random_array2(&mut rng, (5, 6));
     let z = matmul_2(&a, &b);
-    let expected = reference_matmul(&a, &b);
+    let expected = Array2::from_shape_vec(
+        (a.shape()[0], b.shape()[1]),
+        torch_reference(
+            "matmul",
+            a.shape(),
+            a.iter().copied().collect(),
+            b.shape(),
+            b.iter().copied().collect(),
+        ),
+    )
+    .unwrap();
     assert!(z.abs_diff_eq(&expected, 1e-4));
 }
 
@@ -260,7 +342,17 @@ fn test_matmul_3() {
     let a = random_array2(&mut rng, (4, 5));
     let b = random_array2(&mut rng, (5, 6));
     let z = matmul_3(&a, &b);
-    let expected = reference_matmul(&a, &b);
+    let expected = Array2::from_shape_vec(
+        (a.shape()[0], b.shape()[1]),
+        torch_reference(
+            "matmul",
+            a.shape(),
+            a.iter().copied().collect(),
+            b.shape(),
+            b.iter().copied().collect(),
+        ),
+    )
+    .unwrap();
     assert!(z.abs_diff_eq(&expected, 1e-4));
 }
 
@@ -270,7 +362,17 @@ fn test_block_matmul() {
     let a = random_array2(&mut rng, (16, 12));
     let b = random_array2(&mut rng, (12, 8));
     let z = block_matmul(&a, &b);
-    let expected = reference_matmul(&a, &b);
+    let expected = Array2::from_shape_vec(
+        (a.shape()[0], b.shape()[1]),
+        torch_reference(
+            "matmul",
+            a.shape(),
+            a.iter().copied().collect(),
+            b.shape(),
+            b.iter().copied().collect(),
+        ),
+    )
+    .unwrap();
     assert!(z.abs_diff_eq(&expected, 1e-3));
 }
 
@@ -322,16 +424,18 @@ fn test_batch_matmul() {
     let z = batch_matmul(&a.clone().into_dyn(), &b.clone().into_dyn())
         .into_dimensionality::<Ix4>()
         .unwrap();
-    // Verify each batch element against reference matmul
-    for i in 0..2 {
-        for j in 0..3 {
-            let a_slice = a.slice(ndarray::s![i, j, .., ..]).to_owned();
-            let b_slice = b.slice(ndarray::s![i, j, .., ..]).to_owned();
-            let expected = reference_matmul(&a_slice, &b_slice);
-            let z_slice = z.slice(ndarray::s![i, j, .., ..]).to_owned();
-            assert!(z_slice.abs_diff_eq(&expected, 1e-3));
-        }
-    }
+    let expected = Array4::from_shape_vec(
+        (2, 3, 4, 6),
+        torch_reference(
+            "batch_matmul",
+            a.shape(),
+            a.iter().copied().collect(),
+            b.shape(),
+            b.iter().copied().collect(),
+        ),
+    )
+    .unwrap();
+    assert!(z.abs_diff_eq(&expected, 1e-3));
 }
 
 #[test]

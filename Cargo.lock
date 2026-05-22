@@ -3340,6 +3340,7 @@ name = "hw0"
 version = "0.1.0"
 dependencies = [
  "approx",
+ "test-support",
 ]
 
 [[package]]
@@ -3352,6 +3353,7 @@ dependencies = [
  "rand 0.10.1",
  "rand_distr 0.6.0",
  "reqwest 0.13.3",
+ "test-support",
 ]
 
 [[package]]
@@ -3362,6 +3364,7 @@ dependencies = [
  "burn",
  "ndarray 0.17.2",
  "ndarray-stats",
+ "test-support",
 ]
 
 [[package]]
@@ -3375,6 +3378,7 @@ dependencies = [
  "rand 0.10.1",
  "rand_distr 0.6.0",
  "reqwest 0.13.3",
+ "test-support",
 ]
 
 [[package]]
@@ -3386,6 +3390,7 @@ dependencies = [
  "hf-hub",
  "rand 0.10.1",
  "rand_distr 0.6.0",
+ "test-support",
 ]
 
 [[package]]
@@ -3398,6 +3403,7 @@ dependencies = [
  "rand 0.10.1",
  "rand_distr 0.6.0",
  "tempfile",
+ "test-support",
  "tokenizers 0.23.1",
 ]
 
@@ -3413,6 +3419,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-support",
  "tokenizers 0.23.1",
 ]
 
@@ -3428,6 +3435,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "test-support",
  "tokenizers 0.23.1",
 ]
 
@@ -6564,6 +6572,13 @@ dependencies = [
  "wezterm-dynamic",
  "wezterm-input-types",
  "winapi",
+]
+
+[[package]]
+name = "test-support"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
