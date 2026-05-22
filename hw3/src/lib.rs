@@ -68,7 +68,7 @@ use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
 use burn::tensor::activation::relu;
-use burn::tensor::backend::AutodiffBackend;
+use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn::tensor::Distribution;
 
 // This implies f32/i64/i8
@@ -300,39 +300,34 @@ where
     }
 }
 
-/// Run one epoch of training or evaluation.
-///
-/// If optimizer is Some, runs training (forward + backward + step).
-/// Returns (average_loss, error_rate) as floats.
-pub fn epoch<M>(
-    _model: &M,
-    _loader: &[(
-        Tensor<MyAutodiffBackend, 2>,
-        Tensor<MyAutodiffBackend, 1, Int>,
-    )],
-    _optimizer: Option<&mut SGD>,
-) -> (f64, f64)
-where
-    M: Fn(Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2>,
-{
-    todo!()
-}
-
 /// Train a linear model on MNIST and return it.
 ///
 /// Given the full MNIST training data (X_train: N x 784, y_train: N),
 /// train a Linear layer to classify all 10 digits.
 /// The returned model should achieve < 10% error on the test set.
 ///
-/// Use your Linear, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_linear_model<B>(
-    _x_train: Tensor<MyAutodiffBackend, 2>,
-    _y_train: Tensor<MyAutodiffBackend, 1, Int>,
-) -> Linear<B>
-where
-    B: Backend,
-{
-    todo!()
+/// Use your Linear, CrossEntropyLoss, SGD, and DataLoader implementations.
+pub fn eval_linear_model(
+    x_train: Tensor<MyAutodiffBackend, 2>,
+    y_train: Tensor<MyAutodiffBackend, 1, Int>,
+) -> Linear<MyAutodiffBackend> {
+    let device = x_train.device();
+    let mut model: Linear<MyAutodiffBackend> = Linear::new(784, 10, &device);
+    let mut opt = SGD::new(0.2);
+
+    let epochs = 20;
+    let batch_size = 100;
+
+    for _ in 0..epochs {
+        let loader = DataLoader::new(x_train.clone(), y_train.clone(), batch_size);
+        for (x_batch, y_batch) in loader {
+            let logits = model.forward(x_batch);
+            let loss = cross_entropy_loss(logits, y_batch);
+            let grads = loss.backward();
+            opt.step(std::slice::from_mut(&mut model.weight), &grads);
+        }
+    }
+    model
 }
 
 /// Train a two-layer neural network on MNIST and return it.
@@ -341,13 +336,27 @@ where
 /// train a TwoLayerNN to classify all 10 digits.
 /// The returned model should achieve < 3% error on the first 2000 test samples.
 ///
-/// Use your TwoLayerNN, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_two_layer_nn<B>(
-    _x_train: Tensor<MyAutodiffBackend, 2>,
-    _y_train: Tensor<MyAutodiffBackend, 1, Int>,
-) -> TwoLayerNN<B>
-where
-    B: Backend,
-{
-    todo!()
+/// Use your TwoLayerNN, CrossEntropyLoss, SGD, and DataLoader implementations.
+pub fn eval_two_layer_nn(
+    x_train: Tensor<MyAutodiffBackend, 2>,
+    y_train: Tensor<MyAutodiffBackend, 1, Int>,
+) -> TwoLayerNN<MyAutodiffBackend> {
+    let device = x_train.device();
+    let mut model: TwoLayerNN<MyAutodiffBackend> = TwoLayerNN::new(784, 300, 10, &device);
+    let mut opt = SGD::new(0.2);
+
+    let epochs = 20;
+    let batch_size = 100;
+
+    for _ in 0..epochs {
+        let loader = DataLoader::new(x_train.clone(), y_train.clone(), batch_size);
+        for (x_batch, y_batch) in loader {
+            let logits = model.forward(x_batch);
+            let loss = cross_entropy_loss(logits, y_batch);
+            let grads = loss.backward();
+            opt.step(std::slice::from_mut(&mut model.linear1.weight), &grads);
+            opt.step(std::slice::from_mut(&mut model.linear2.weight), &grads);
+        }
+    }
+    model
 }
