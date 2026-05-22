@@ -70,6 +70,7 @@ use burn::prelude::*;
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::Distribution;
 
+// This implies f32/i64/i8
 pub type MyBackend = NdArray<f32>;
 pub type MyAutodiffBackend = Autodiff<MyBackend>;
 
@@ -171,16 +172,26 @@ impl SGD {
 /// Iterating twice should produce the same batches.
 /// Last batch may be smaller than batch_size.
 pub struct DataLoader {
-    // TODO
+    pub x_batches: Vec<Tensor<MyAutodiffBackend, 2>>,
+    pub y_batches: Vec<Tensor<MyAutodiffBackend, 1, Int>>,
+    index: usize,
+    n: usize,
 }
 
 impl DataLoader {
     pub fn new(
-        _x: Tensor<MyAutodiffBackend, 2>,
-        _y: Tensor<MyAutodiffBackend, 1, Int>,
-        _batch_size: usize,
+        x: Tensor<MyAutodiffBackend, 2>,
+        y: Tensor<MyAutodiffBackend, 1, Int>,
+        batch_size: usize,
     ) -> Self {
-        todo!()
+        let n = x.clone().shape()[0].div_ceil(batch_size);
+
+        DataLoader {
+            x_batches: x.split(batch_size, 0),
+            y_batches: y.split(batch_size, 0),
+            index: 0,
+            n,
+        }
     }
 }
 
@@ -191,7 +202,15 @@ impl Iterator for DataLoader {
     );
 
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        if self.index >= self.n {
+            None
+        } else {
+            self.index += 1;
+            Some((
+                self.x_batches[self.index - 1].clone(),
+                self.y_batches[self.index - 1].clone(),
+            ))
+        }
     }
 }
 
