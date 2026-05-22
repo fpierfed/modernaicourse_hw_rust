@@ -67,6 +67,7 @@ use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
+use burn::tensor::activation::relu;
 use burn::tensor::backend::AutodiffBackend;
 use burn::tensor::Distribution;
 
@@ -218,22 +219,30 @@ impl Iterator for DataLoader {
 ///
 /// Implements h(x) = W2 * relu(W1 * x).
 /// Store layers as .linear1 and .linear2.
-pub struct TwoLayerNN {
-    // TODO
+#[derive(Module, Debug)]
+pub struct TwoLayerNN<B: Backend> {
+    linear1: Linear<B>,
+    linear2: Linear<B>,
 }
 
-impl TwoLayerNN {
+impl<B> TwoLayerNN<B>
+where
+    B: Backend,
+{
     pub fn new(
-        _in_features: usize,
-        _hidden_features: usize,
-        _out_features: usize,
-        _device: &Device<MyAutodiffBackend>,
+        in_features: usize,
+        hidden_features: usize,
+        out_features: usize,
+        device: &B::Device,
     ) -> Self {
-        todo!()
+        TwoLayerNN {
+            linear1: Linear::new(in_features, hidden_features, device),
+            linear2: Linear::new(hidden_features, out_features, device),
+        }
     }
 
-    pub fn forward(&self, _x: Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2> {
-        todo!()
+    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+        self.linear2.forward(relu(self.linear1.forward(x)))
     }
 }
 
@@ -241,22 +250,53 @@ impl TwoLayerNN {
 ///
 /// Implements h(x) = W_L * relu(W_{L-1} * relu(... W_2 * relu(W_1 * x) ...))
 /// Store all layers in a single .linears Vec.
-pub struct MultiLayerNN {
-    // TODO
+#[derive(Module, Debug)]
+pub struct MultiLayerNN<B: Backend> {
+    linears: Vec<Linear<B>>,
 }
 
-impl MultiLayerNN {
+impl<B> MultiLayerNN<B>
+where
+    B: Backend,
+{
     pub fn new(
-        _in_features: usize,
-        _out_features: usize,
-        _hidden_dims: &[usize],
-        _device: &Device<MyAutodiffBackend>,
+        in_features: usize,
+        out_features: usize,
+        hidden_dims: &[usize],
+        device: &B::Device,
     ) -> Self {
-        todo!()
+        assert!(
+            !hidden_dims.is_empty(),
+            "Expecting at leat 1 hidden dimension!"
+        );
+
+        let mut d1: usize;
+        let mut d0: usize = in_features;
+        let mut linears: Vec<Linear<B>> = vec![];
+
+        for &hidden_dim in hidden_dims {
+            d1 = hidden_dim;
+            linears.push(Linear::new(d0, d1, device));
+            d0 = d1;
+        }
+        linears.push(Linear::new(
+            // we are covered by the assert above.
+            *hidden_dims.last().unwrap(),
+            out_features,
+            device,
+        ));
+
+        MultiLayerNN { linears }
     }
 
-    pub fn forward(&self, _x: Tensor<MyAutodiffBackend, 2>) -> Tensor<MyAutodiffBackend, 2> {
-        todo!()
+    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+        let mut result = x.clone();
+
+        // apply relu(model.forward) on all bu the last one...
+        for i in 0..(self.linears.len() - 1) {
+            result = relu(self.linears[i].forward(result));
+        }
+        self.linears.last().unwrap().forward(result)
     }
 }
 
@@ -302,9 +342,12 @@ where
 /// The returned model should achieve < 3% error on the first 2000 test samples.
 ///
 /// Use your TwoLayerNN, CrossEntropyLoss, SGD, DataLoader, and epoch implementations.
-pub fn eval_two_layer_nn(
+pub fn eval_two_layer_nn<B>(
     _x_train: Tensor<MyAutodiffBackend, 2>,
     _y_train: Tensor<MyAutodiffBackend, 1, Int>,
-) -> TwoLayerNN {
+) -> TwoLayerNN<B>
+where
+    B: Backend,
+{
     todo!()
 }
