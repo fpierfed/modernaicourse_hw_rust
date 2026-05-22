@@ -20,13 +20,16 @@ capabilities.
 8. [HW6: LLM Training Pipeline](#hw6-llm-training-pipeline)
 9. [HW7: Tool-Use Agent](#hw7-tool-use-agent)
 10. [Key Differences from the Python Implementation](#key-differences)
-11. [Testing Philosophy](#testing-philosophy)
+11. [Test Prerequisites](#test-prerequisites)
+12. [Testing Philosophy](#testing-philosophy)
+13. [Getting Started](#getting-started)
 
 ---
 
 ## Project Organization
 
-The workspace is structured as a Cargo workspace with eight independent crates:
+The workspace is structured as a Cargo workspace with eight homework crates and
+one shared test-support crate:
 
 ```
 moderaicourse_hw_rust_ws/
@@ -38,12 +41,13 @@ moderaicourse_hw_rust_ws/
 ├── hw4/                # End-to-end: train models on MNIST
 ├── hw5/                # Transformers: attention, KV cache, Llama3
 ├── hw6/                # LLM training: BPE, Adam, data pipeline
-└── hw7/                # Agents: tool-use, structured generation
+├── hw7/                # Agents: tool-use, structured generation
+└── test_support/       # Shared test helpers, including PyTorch references
 ```
 
-Each crate is self-contained with its own `Cargo.toml`, `src/lib.rs` (public
-API), and `tests/` directory. The workspace `Cargo.toml` declares shared
-dependency versions to avoid conflicts and keep upgrades synchronized.
+Each homework crate is self-contained with its own `Cargo.toml`, `src/lib.rs`
+(public API), and `tests/` directory. The workspace `Cargo.toml` declares
+shared dependency versions to avoid conflicts and keep upgrades synchronized.
 
 **Why separate crates instead of one library?**
 
@@ -593,6 +597,29 @@ references or owned copies of parameter tensors, which affects API design.
 
 ---
 
+## Test Prerequisites
+
+Many tests compare the Rust assignment code against an equivalent PyTorch
+calculation through the shared `test_support` crate. Those tests invoke
+`python3` at runtime, so run them from a Python virtual environment where
+PyTorch is installed and importable:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+python -m pip install torch
+
+python3 -c "import torch; print(torch.__version__)"
+```
+
+Keep the virtualenv activated when running `cargo test`; the test harness
+expects `python3` to resolve to that environment's Python. `cargo check` and
+`cargo test --no-run` only validate Rust compilation, but executing the
+PyTorch-backed tests requires the Python environment above.
+
+---
+
 ## Testing Philosophy
 
 ### What we port from the Python tests
@@ -602,8 +629,8 @@ references or owned copies of parameter tensors, which affects API design.
 - **Shape assertions**: "Does `model(X)` output the right dimensions?" Direct
   port.
 - **Numerical agreement**: "Does our attention match PyTorch's
-  `F.scaled_dot_product_attention`?" We pre-compute expected values and
-  hard-code them, since we can't call PyTorch at test time.
+  `F.scaled_dot_product_attention`?" For tensor-heavy tests, we execute a small
+  PyTorch reference script at test time and compare the Rust result against it.
 - **Error handling**: `#[should_panic]` replaces `pytest.raises`.
 
 ### What we skip
