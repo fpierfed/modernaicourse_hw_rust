@@ -63,7 +63,6 @@
  * Store all Linear layers in a single Vec called .linears.
  */
 
-use burn::backend::ndarray::NdArray;
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
@@ -71,8 +70,24 @@ use burn::tensor::activation::relu;
 use burn::tensor::backend::{AutodiffBackend, Backend};
 use burn::tensor::Distribution;
 
-// This implies f32/i64/i8
-pub type MyBackend = NdArray<f32>;
+#[cfg(feature = "cuda")]
+pub type MyBackend = burn::backend::Cuda<f32, i32>;
+
+#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
+pub type MyBackend = burn::backend::Wgpu<f32, i32>;
+
+#[cfg(not(any(feature = "cuda", feature = "wgpu")))]
+pub type MyBackend = burn::backend::NdArray<f32, i32>;
+
+#[cfg(feature = "cuda")]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::cuda::CudaDevice { index: 0 };
+
+#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::wgpu::WgpuDevice::DefaultDevice;
+
+#[cfg(not(any(feature = "cuda", feature = "wgpu")))]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::ndarray::NdArrayDevice::Cpu;
+
 pub type MyAutodiffBackend = Autodiff<MyBackend>;
 
 /// Linear layer (no bias) with Kaiming initialization.

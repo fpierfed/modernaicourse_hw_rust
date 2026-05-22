@@ -1,9 +1,6 @@
-use burn::backend::ndarray::NdArrayDevice;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use hw3::*;
 use test_support::{as_f32_vec, assert_f32_close, assert_f32_slice_close, json, python_json};
-
-const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
 
 fn torch_linear(
     x: Vec<f32>,
@@ -27,7 +24,7 @@ json.dump(F.linear(x, w).flatten().tolist(), sys.stdout)
     ))
 }
 
-fn torch_cross_entropy(logits: Vec<f32>, shape: [usize; 2], targets: Vec<i64>) -> f32 {
+fn torch_cross_entropy(logits: Vec<f32>, shape: [usize; 2], targets: Vec<i32>) -> f32 {
     as_f32_vec(python_json(
         r#"
 import json
@@ -109,7 +106,7 @@ fn test_cross_entropy_loss() {
         &DEVICE,
     );
     let y: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([0i64, 2]), &DEVICE);
+        Tensor::from_data(TensorData::from([0i32, 2]), &DEVICE);
     let loss = cross_entropy_loss(logits, y);
     let loss_val: f32 = loss.into_scalar();
     let expected = torch_cross_entropy(vec![2.0, 1.0, 0.0, 0.0, 2.0, 1.0], [2, 3], vec![0, 2]);
@@ -123,7 +120,7 @@ fn test_cross_entropy_numerically_stable() {
         &DEVICE,
     );
     let y: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([1i64, 2]), &DEVICE);
+        Tensor::from_data(TensorData::from([1i32, 2]), &DEVICE);
     let loss = cross_entropy_loss(logits, y);
     let loss_val: f32 = loss.into_scalar();
     let expected = torch_cross_entropy(
@@ -148,7 +145,7 @@ fn test_sgd_step() {
     let x: Tensor<MyAutodiffBackend, 2> =
         Tensor::random([12, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
     let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(
-        TensorData::from([0i64, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]),
+        TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1, 2, 0, 1, 2]),
         &DEVICE,
     );
 
@@ -181,7 +178,7 @@ fn test_sgd_zero_grad() {
     let x: Tensor<MyAutodiffBackend, 2> =
         Tensor::random([4, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
     let y: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([0i64, 1, 2, 0]), &DEVICE);
+        Tensor::from_data(TensorData::from([0i32, 1, 2, 0]), &DEVICE);
     let logits = layer.forward(x);
     let loss = cross_entropy_loss(logits, y);
     let _grads = loss.backward();
@@ -242,8 +239,8 @@ fn test_dataloader_content() {
         .unwrap();
     assert_eq!(xb0, x_expected);
 
-    let yb0: Vec<i64> = batches[0].1.clone().into_data().to_vec().unwrap();
-    let y_expected: Vec<i64> = y.clone().narrow(0, 0, 5).into_data().to_vec().unwrap();
+    let yb0: Vec<i32> = batches[0].1.clone().into_data().to_vec().unwrap();
+    let y_expected: Vec<i32> = y.clone().narrow(0, 0, 5).into_data().to_vec().unwrap();
     assert_eq!(yb0, y_expected);
 
     // Last batch: rows 10..12
@@ -289,8 +286,8 @@ fn test_dataloader_reiterable() {
             .to_vec()
             .unwrap();
         assert_eq!(v1, v2);
-        let l1: Vec<i64> = yb1.clone().into_data().to_vec().unwrap();
-        let l2: Vec<i64> = yb2.clone().into_data().to_vec().unwrap();
+        let l1: Vec<i32> = yb1.clone().into_data().to_vec().unwrap();
+        let l2: Vec<i32> = yb2.clone().into_data().to_vec().unwrap();
         assert_eq!(l1, l2);
     }
 }
@@ -356,13 +353,10 @@ fn test_multi_layer_nn_single_hidden() {
 // --- MNIST end-to-end tests ---
 
 mod mnist {
-    use burn::backend::ndarray::NdArrayDevice;
     use burn::tensor::{Int, Tensor, TensorData};
     use flate2::read::GzDecoder;
-    use hw3::MyAutodiffBackend;
+    use hw3::{DEVICE, MyAutodiffBackend};
     use std::io::Read;
-
-    const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
 
     const MIRRORS: &[&str] = &[
         "https://ossci-datasets.s3.amazonaws.com/mnist/",
@@ -431,7 +425,7 @@ mod mnist {
         let magic = u32::from_be_bytes(data[0..4].try_into().unwrap());
         assert_eq!(magic, 2049);
         let n_labels = u32::from_be_bytes(data[4..8].try_into().unwrap()) as usize;
-        let labels: Vec<i64> = data[8..8 + n_labels].iter().map(|&l| l as i64).collect();
+        let labels: Vec<i32> = data[8..8 + n_labels].iter().map(|&l| l as i32).collect();
         Tensor::from_data(TensorData::new(labels, [n_labels]), &DEVICE)
     }
 
@@ -503,7 +497,7 @@ fn test_eval_two_layer_nn() {
 fn test_cross_entropy_loss_single_sample() {
     let logits: Tensor<MyAutodiffBackend, 2> =
         Tensor::from_data(TensorData::from([[1.0f32, 2.0, 3.0]]), &DEVICE);
-    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([2i64]), &DEVICE);
+    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([2i32]), &DEVICE);
     let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
     let expected = torch_cross_entropy(vec![1.0, 2.0, 3.0], [1, 3], vec![2]);
     assert!(loss.is_finite());
@@ -517,7 +511,7 @@ fn test_cross_entropy_loss_perfect_prediction() {
         &DEVICE,
     );
     let y: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([0i64, 1]), &DEVICE);
+        Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
     let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
     assert!(loss.is_finite());
     assert!(
@@ -531,7 +525,7 @@ fn test_cross_entropy_loss_large_logits_stable() {
     let logits: Tensor<MyAutodiffBackend, 2> =
         Tensor::from_data(TensorData::from([[1e30f32, 0.0], [0.0, 1e30]]), &DEVICE);
     let y: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([0i64, 1]), &DEVICE);
+        Tensor::from_data(TensorData::from([0i32, 1]), &DEVICE);
     let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
     assert!(
         loss.is_finite(),
@@ -562,7 +556,7 @@ fn test_sgd_moves_in_gradient_direction() {
 
     let x: Tensor<MyAutodiffBackend, 2> =
         Tensor::from_data(TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]), &DEVICE);
-    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([0i64]), &DEVICE);
+    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([0i32]), &DEVICE);
 
     let logits = layer.forward(x);
     let loss = cross_entropy_loss(logits, y);
@@ -574,7 +568,7 @@ fn test_sgd_moves_in_gradient_direction() {
     let x2: Tensor<MyAutodiffBackend, 2> =
         Tensor::from_data(TensorData::from([[1.0f32, 0.0, 0.0, 0.0]]), &DEVICE);
     let y2: Tensor<MyAutodiffBackend, 1, Int> =
-        Tensor::from_data(TensorData::from([0i64]), &DEVICE);
+        Tensor::from_data(TensorData::from([0i32]), &DEVICE);
     let logits2 = layer.forward(x2);
     let loss2: f32 = cross_entropy_loss(logits2, y2).into_scalar();
     assert!(
@@ -587,7 +581,7 @@ fn test_sgd_moves_in_gradient_direction() {
 fn test_dataloader_single_sample() {
     let x: Tensor<MyAutodiffBackend, 2> =
         Tensor::from_data(TensorData::from([[1.0f32, 2.0]]), &DEVICE);
-    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([0i64]), &DEVICE);
+    let y: Tensor<MyAutodiffBackend, 1, Int> = Tensor::from_data(TensorData::from([0i32]), &DEVICE);
 
     let loader = DataLoader::new(x, y, 10);
     let batches: Vec<_> = loader.collect();
