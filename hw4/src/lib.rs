@@ -292,7 +292,7 @@ impl<B> MultiHeadAttention<B>
 where
     B: Backend,
 {
-    pub fn new(dim: usize, n_heads: usize, max_cache: usize, device: &B::Device) -> Self {
+    pub fn new(dim: usize, n_heads: usize, device: &B::Device) -> Self {
         MultiHeadAttention {
             wq: Linear::new(dim, dim, device),
             wk: Linear::new(dim, dim, device),
@@ -302,6 +302,9 @@ where
         }
     }
 
+    // Note that `seq_pos` and `use_cache` are not used here, just like
+    // in the Python version.
+    #[allow(unused_variables)]
     pub fn forward(
         &mut self,
         x: Tensor<B, 3>,
@@ -369,7 +372,12 @@ pub struct MultiHeadAttentionKVCache<B: Backend> {
     pub wk: Linear<B>,
     pub wv: Linear<B>,
     pub wp: Linear<B>,
+
     pub n_heads: usize,
+    pub max_cache_size: usize,
+
+    pub k_cache: Tensor<B, 3>,
+    pub v_cache: Tensor<B, 3>,
 }
 
 impl<B> MultiHeadAttentionKVCache<B>
@@ -377,7 +385,16 @@ where
     B: Backend,
 {
     pub fn new(dim: usize, n_heads: usize, max_cache: usize, device: &B::Device) -> Self {
-        todo!()
+        MultiHeadAttentionKVCache {
+            wq: Linear::new(dim, dim, device),
+            wk: Linear::new(dim, dim, device),
+            wv: Linear::new(dim, dim, device),
+            wp: Linear::new(dim, dim, device),
+            n_heads,
+            max_cache_size: max_cache,
+            k_cache: Tensor::zeros([1, max_cache, dim], device),
+            v_cache: Tensor::zeros([1, max_cache, dim], device),
+        }
     }
 
     pub fn forward(
@@ -387,7 +404,51 @@ where
         seq_pos: usize,
         use_cache: bool,
     ) -> Tensor<B, 3> {
-        todo!()
+        let q = self.wq.forward(x.clone());
+        let k = self.wk.forward(x.clone());
+        let v = self.wv.forward(x.clone());
+
+        let working_k: Tensor<B, 3>;
+        let working_v: Tensor<B, 3>;
+
+        let [_batch_size, seq_len, dim] = x.dims();
+
+        if use_cache {
+            let (start, end) = (seq_pos, seq_pos + seq_len);
+            self.k_cache
+                .clone()
+                .slice_assign([0..1, start..end, 0..dim], k);
+            self.v_cache
+                .clone()
+                .slice_assign([0..1, start..end, 0..dim], v);
+            working_k = self.k_cache.clone().slice([0..1, 0..end, 0..dim]);
+            working_v = self.v_cache.clone().slice([0..1, 0..end, 0..dim]);
+        } else {
+            working_k = k;
+            working_v = v;
+        }
+
+        let [kv_batch_size, kv_seq_len, kv_dim] = working_k.dims();
+        let kv_head_dim = kv_dim / self.n_heads;
+        let new_kv_dims = [kv_batch_size, kv_seq_len, self.n_heads, kv_head_dim];
+
+        let [batch_size, seq_len, dim] = q.dims();
+        let head_dim = dim / self.n_heads;
+        let new_q_dims = [batch_size, seq_len, self.n_heads, head_dim];
+
+        // Need to use transpose on seq_len, self.n_heads to be able to
+        // iterate over the head blocks.
+        // Process all batches
+        let y = self_attention(
+            q.reshape(new_q_dims).swap_dims(1, 2),
+            working_k.reshape(new_kv_dims).swap_dims(1, 2),
+            working_v.reshape(new_kv_dims).swap_dims(1, 2),
+            mask,
+        );
+
+        // Go back to old dimensions, undo all operations in reverse.
+        self.wp
+            .forward(y.swap_dims(1, 2).reshape([batch_size, seq_len, dim]))
     }
 }
 

@@ -437,7 +437,7 @@ fn test_self_attention_no_mask() {
 
 #[test]
 fn test_mha_shape() {
-    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let mut attn = MultiHeadAttention::new(12, 3, &DEVICE);
     let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
     let out = attn.forward(x, None, 0, false);
     assert_eq!(out.dims(), [2, 5, 12]);
@@ -445,7 +445,7 @@ fn test_mha_shape() {
 
 #[test]
 fn test_mha_correctness() {
-    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let mut attn = MultiHeadAttention::new(12, 3, &DEVICE);
     let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
     let out = attn.forward(x.clone(), None, 0, false);
 
@@ -465,7 +465,7 @@ fn test_mha_correctness() {
 
 #[test]
 fn test_mha_with_mask() {
-    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let mut attn = MultiHeadAttention::new(12, 3, &DEVICE);
     let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
     let mask = causal_mask(5);
     let out = attn.forward(x.clone(), Some(mask), 0, false);
