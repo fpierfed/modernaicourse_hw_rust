@@ -101,8 +101,14 @@ where
         }
     }
 
-    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
-        x.matmul(self.weight.val().transpose())
+    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+        // burn matmul expects both matrices to have compatibel dimensions
+        // and does not reshape/unsqueeze as needed, so we meed to be
+        // explicit.
+        //
+        // Unsqueeze or reshape? They are the same but the reshape is
+        // usually somewhat faster but unsqueeze is more readable...
+        x.matmul(self.weight.val().transpose().unsqueeze::<D>())
     }
 }
 
