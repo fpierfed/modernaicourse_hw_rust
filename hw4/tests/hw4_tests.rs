@@ -108,6 +108,59 @@ json.dump(out.flatten().tolist(), sys.stdout)
     ))
 }
 
+fn torch_mha(
+    x: Vec<f32>,
+    x_shape: Vec<usize>,
+    wq: Vec<f32>,
+    wk: Vec<f32>,
+    wv: Vec<f32>,
+    wp: Vec<f32>,
+    n_heads: usize,
+    mask_len: Option<usize>,
+) -> Vec<f32> {
+    as_f32_vec(python_json(
+        r#"
+import json
+import sys
+import torch
+import torch.nn as nn
+
+d = json.load(sys.stdin)
+dim = d["x_shape"][-1]
+wq = torch.tensor(d["wq"], dtype=torch.float32).reshape(dim, dim)
+wk = torch.tensor(d["wk"], dtype=torch.float32).reshape(dim, dim)
+wv = torch.tensor(d["wv"], dtype=torch.float32).reshape(dim, dim)
+wp = torch.tensor(d["wp"], dtype=torch.float32).reshape(dim, dim)
+
+ref_attn = nn.MultiheadAttention(dim, d["n_heads"], bias=False, batch_first=True)
+with torch.no_grad():
+    ref_attn.in_proj_weight.copy_(torch.cat([wq, wk, wv], dim=0))
+    ref_attn.out_proj.weight.copy_(wp)
+
+x = torch.tensor(d["x"], dtype=torch.float32).reshape(d["x_shape"])
+mask = None
+if d["mask_len"] is not None:
+    length = d["mask_len"]
+    mask = torch.triu(torch.full((length, length), float("-inf")), diagonal=1)
+
+with torch.no_grad():
+    out = ref_attn(x, x, x, attn_mask=mask, need_weights=False)[0]
+
+json.dump(out.flatten().tolist(), sys.stdout)
+"#,
+        json!({
+            "x": x,
+            "x_shape": x_shape,
+            "wq": wq,
+            "wk": wk,
+            "wv": wv,
+            "wp": wp,
+            "n_heads": n_heads,
+            "mask_len": mask_len,
+        }),
+    ))
+}
+
 fn causal_mask(length: usize) -> Tensor<B, 2> {
     let mask_data: Vec<f32> = (0..length)
         .flat_map(|i| (0..length).map(move |j| if j > i { f32::NEG_INFINITY } else { 0.0 }))
@@ -345,7 +398,7 @@ fn test_self_attention_batched() {
     let k: Tensor<B, 4> = Tensor::random([2, 3, 5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
     let v: Tensor<B, 4> = Tensor::random([2, 3, 5, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
     let mask = causal_mask(5);
-    let out = self_attention_batched(q.clone(), k.clone(), v.clone(), Some(mask));
+    let out = self_attention(q.clone(), k.clone(), v.clone(), Some(mask));
     assert_eq!(out.dims(), [2, 3, 5, 4]);
     let expected = torch_attention(
         q.clone().into_data().to_vec::<f32>().unwrap(),
@@ -378,6 +431,57 @@ fn test_self_attention_no_mask() {
     );
     let actual = out.into_data().to_vec::<f32>().unwrap();
     assert_f32_slice_close(&actual, &expected, 1e-5);
+}
+
+// --- MultiHeadAttention ---
+
+#[test]
+fn test_mha_shape() {
+    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let out = attn.forward(x, None, 0, false);
+    assert_eq!(out.dims(), [2, 5, 12]);
+}
+
+#[test]
+fn test_mha_correctness() {
+    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let out = attn.forward(x.clone(), None, 0, false);
+
+    let expected = torch_mha(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+        attn.wq.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wk.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wv.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wp.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.n_heads,
+        None,
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-4);
+}
+
+#[test]
+fn test_mha_with_mask() {
+    let mut attn = MultiHeadAttention::new(12, 3, 8, &DEVICE);
+    let x: Tensor<B, 3> = Tensor::random([2, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
+    let mask = causal_mask(5);
+    let out = attn.forward(x.clone(), Some(mask), 0, false);
+
+    let expected = torch_mha(
+        x.clone().into_data().to_vec::<f32>().unwrap(),
+        x.dims().to_vec(),
+        attn.wq.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wk.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wv.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.wp.weight.val().into_data().to_vec::<f32>().unwrap(),
+        attn.n_heads,
+        Some(5),
+    );
+    let actual = out.into_data().to_vec::<f32>().unwrap();
+    assert_f32_slice_close(&actual, &expected, 1e-4);
 }
 
 // --- MultiHeadAttentionKVCache ---
