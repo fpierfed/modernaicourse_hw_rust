@@ -62,9 +62,8 @@
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
-use burn::tensor::activation::{relu, sigmoid};
-use burn::tensor::backend::{AutodiffBackend, Backend};
-use burn::tensor::Distribution;
+use burn::tensor::activation::sigmoid;
+use burn::tensor::backend::Backend;
 
 #[cfg(feature = "cuda")]
 pub type MyBackend = burn::backend::Cuda<f32, i32>;
