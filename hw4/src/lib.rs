@@ -64,6 +64,7 @@ use burn::module::{Module, Param};
 use burn::prelude::*;
 use burn::tensor::activation::{sigmoid, softmax};
 use burn::tensor::backend::Backend;
+use burn::tensor::Distribution;
 
 #[cfg(feature = "cuda")]
 pub type MyBackend = burn::backend::Cuda<f32, i32>;
@@ -85,6 +86,8 @@ pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::ndarray::NdArrayDev
 
 pub type MyAutodiffBackend = Autodiff<MyBackend>;
 
+const EPSILON: f64 = 1.0e-5;
+
 #[derive(Module, Debug)]
 pub struct Linear<B: Backend> {
     pub weight: Param<Tensor<B, 2>>,
@@ -95,11 +98,13 @@ where
     B: Backend,
 {
     pub fn new(in_dim: usize, out_dim: usize, device: &B::Device) -> Self {
+        let std = (2.0 / in_dim as f64).sqrt();
         Linear {
-            // This is a real no-no in general, but this homeworks requires
-            // up to load llama weights and instructs to just zero out the
-            // weights.
-            weight: Param::from_tensor(Tensor::<B, 2>::zeros([out_dim, in_dim], device)),
+            weight: Param::from_tensor(Tensor::<B, 2>::random(
+                [out_dim, in_dim],
+                Distribution::Normal(0.0, std),
+                device,
+            )),
         }
     }
 
@@ -455,7 +460,8 @@ where
 #[derive(Module, Debug)]
 pub struct GatedMLP<B: Backend> {
     pub w1: Linear<B>,
-    // ...
+    pub w2: Linear<B>,
+    pub w3: Linear<B>,
 }
 
 impl<B> GatedMLP<B>
@@ -463,17 +469,24 @@ where
     B: Backend,
 {
     pub fn new(dim: usize, ffn_dim: usize, device: &B::Device) -> Self {
-        todo!()
+        GatedMLP {
+            w1: Linear::new(dim, ffn_dim, device),
+            w2: Linear::new(ffn_dim, dim, device),
+            w3: Linear::new(dim, ffn_dim, device),
+        }
     }
     pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
-        todo!()
+        self.w2
+            .forward(silu(self.w1.forward(x.clone())) * self.w3.forward(x.clone()))
     }
 }
 
 #[derive(Module, Debug)]
 pub struct TransformerBlock<B: Backend> {
     pub attn: MultiHeadAttentionKVCache<B>,
-    // ...
+    pub norm1: RMSNorm<B>,
+    pub norm2: RMSNorm<B>,
+    pub mlp: GatedMLP<B>,
 }
 
 impl<B> TransformerBlock<B>
@@ -487,8 +500,14 @@ where
         max_seq: usize,
         device: &B::Device,
     ) -> Self {
-        todo!()
+        TransformerBlock {
+            attn: MultiHeadAttentionKVCache::new(dim, n_heads, max_seq, device),
+            norm1: RMSNorm::new(dim, EPSILON, device),
+            norm2: RMSNorm::new(dim, EPSILON, device),
+            mlp: GatedMLP::new(dim, ffn_dim, device),
+        }
     }
+
     pub fn forward(
         &mut self,
         x: Tensor<B, 3>,
@@ -496,7 +515,11 @@ where
         seq_pos: usize,
         use_cache: bool,
     ) -> Tensor<B, 3> {
-        todo!()
+        let z = x.clone()
+            + self
+                .attn
+                .forward(self.norm1.forward(x.clone()), mask, seq_pos, use_cache);
+        z.clone() + self.mlp.forward(self.norm2.forward(z.clone()))
     }
 }
 

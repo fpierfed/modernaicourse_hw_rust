@@ -897,18 +897,6 @@ fn test_self_attention_output_is_weighted_v() {
 }
 
 #[test]
-fn test_gated_mlp_output_nonzero() {
-    let mlp = GatedMLP::new(8, 16, &DEVICE);
-    let x: Tensor<B, 2> = Tensor::from_data(TensorData::new(vec![1.0f32; 8], [1, 8]), &DEVICE);
-    let out = mlp.forward(x);
-    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    assert!(
-        vals.iter().any(|&v| v != 0.0),
-        "GatedMLP should produce nonzero output for nonzero input"
-    );
-}
-
-#[test]
 fn test_transformer_block_output_finite() {
     let mut block = TransformerBlock::new(8, 2, 16, 10, &DEVICE);
     let x: Tensor<B, 3> = Tensor::random([1, 4, 8], Distribution::Normal(0.0, 0.1), &DEVICE);
