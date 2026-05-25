@@ -149,15 +149,15 @@ pub fn silu<B, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D>
 where
     B: Backend,
 {
-    x.clone().matmul(sigmoid(x.clone()))
+    x.clone() * sigmoid(x.clone())
 }
 
 fn normalize<B, const D: usize>(x: Tensor<B, D>, eps: f64) -> Tensor<B, D>
 where
     B: Backend,
 {
-    let last_dim = x.dims()[x.dims().len() - 1];
-    let dims = vec![last_dim];
+    let last_dim_index = D - 1;
+    let dims = [last_dim_index];
     x.clone() / (x.clone().powi_scalar(2).mean_dims(&dims) + eps).sqrt()
 }
 
