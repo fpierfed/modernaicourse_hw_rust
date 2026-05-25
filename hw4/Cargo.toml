@@ -12,3 +12,9 @@ rand_distr = { workspace = true }
 approx = { workspace = true }
 hf-hub = { workspace = true }
 test-support = { path = "../test_support" }
+
+[features]
+default = ["ndarray"]
+ndarray = ["burn/ndarray"]
+wgpu = ["burn/wgpu"]
+cuda = ["burn/cuda"]

@@ -59,159 +59,267 @@
  * 4. Stop at stop_tokens or max_tokens
  */
 
-use burn::backend::ndarray::{NdArray, NdArrayDevice};
 use burn::backend::Autodiff;
-#[allow(unused_imports)]
-use burn::tensor::{Int, Tensor, TensorData};
+use burn::module::{Module, Param};
+use burn::prelude::*;
+use burn::tensor::activation::{relu, sigmoid};
+use burn::tensor::backend::{AutodiffBackend, Backend};
+use burn::tensor::Distribution;
 
-pub type B = Autodiff<NdArray<f32>>;
-pub type Device = NdArrayDevice;
+#[cfg(feature = "cuda")]
+pub type MyBackend = burn::backend::Cuda<f32, i32>;
 
-pub struct Linear {}
-impl Linear {
-    pub fn new(_in_f: usize, _out_f: usize, _device: &Device) -> Self {
-        todo!()
+#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
+pub type MyBackend = burn::backend::Wgpu<f32, i32>;
+
+#[cfg(not(any(feature = "cuda", feature = "wgpu")))]
+pub type MyBackend = burn::backend::NdArray<f32, i32>;
+
+#[cfg(feature = "cuda")]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::cuda::CudaDevice { index: 0 };
+
+#[cfg(all(feature = "wgpu", not(feature = "cuda")))]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::wgpu::WgpuDevice::DefaultDevice;
+
+#[cfg(not(any(feature = "cuda", feature = "wgpu")))]
+pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::ndarray::NdArrayDevice::Cpu;
+
+pub type MyAutodiffBackend = Autodiff<MyBackend>;
+
+#[derive(Module, Debug)]
+pub struct Linear<B: Backend> {
+    pub weight: Param<Tensor<B, 2>>,
+}
+
+impl<B> Linear<B>
+where
+    B: Backend,
+{
+    pub fn new(in_dim: usize, out_dim: usize, device: &B::Device) -> Self {
+        Linear {
+            weight: Param::from_tensor(Tensor::<B, 2>::zeros([out_dim, in_dim], device)),
+        }
     }
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
-        todo!()
-    }
-    pub fn weight(&self) -> &Tensor<B, 2> {
-        todo!()
+
+    pub fn forward(&self, x: Tensor<B, 2>) -> Tensor<B, 2> {
+        x.matmul(self.weight.val().transpose())
     }
 }
 
-pub struct Embedding {}
-impl Embedding {
-    pub fn new(_num_tokens: usize, _dim: usize, _device: &Device) -> Self {
-        todo!()
+#[derive(Module, Debug)]
+pub struct Embedding<B: Backend> {
+    pub weight: Param<Tensor<B, 2>>,
+}
+
+impl<B> Embedding<B>
+where
+    B: Backend,
+{
+    pub fn new(num_tokens: usize, dim: usize, device: &B::Device) -> Self {
+        Embedding {
+            weight: Param::from_tensor(Tensor::<B, 2>::zeros([num_tokens, dim], device)),
+        }
     }
-    pub fn forward(&self, _indices: Tensor<B, 2, Int>) -> Tensor<B, 3> {
-        todo!()
-    }
-    pub fn weight(&self) -> &Tensor<B, 2> {
-        todo!()
+
+    pub fn forward(&self, indices: Tensor<B, 2, Int>) -> Tensor<B, 3> {
+        // So, in PyTorch we would just return self.weight[indices] and
+        // be done with it. In burn it is not that simple: we need to
+        // 1. flatten indices (so that we can use select)
+        // 2. self.weight.gather(0, flattened indices)
+        // 3. reshape the result to the desired size
+        let [batch_size, sequence_length] = indices.dims();
+        let [_num_tokens, dim] = self.weight.val().dims();
+
+        let flattened_indices = indices.reshape([batch_size * sequence_length]);
+        self.weight
+            .val()
+            .clone()
+            .select(0, flattened_indices)
+            .reshape([batch_size, sequence_length, dim])
     }
 }
 
-pub fn silu<const D: usize>(_x: Tensor<B, D>) -> Tensor<B, D> {
+pub fn silu<B, const D: usize>(x: Tensor<B, D>) -> Tensor<B, D>
+where
+    B: Backend,
+{
+    x.clone().matmul(sigmoid(x.clone()))
+}
+
+fn normalize<B, const D: usize>(x: Tensor<B, D>, eps: f64) -> Tensor<B, D>
+where
+    B: Backend,
+{
+    let last_dim = x.dims()[x.dims().len() - 1];
+    let dims = vec![last_dim];
+    x.clone() / (x.clone().powi_scalar(2).mean_dims(&dims) + eps).sqrt()
+}
+
+#[derive(Module, Debug)]
+pub struct RMSNorm<B: Backend> {
+    pub eps: f64,
+    pub weight: Param<Tensor<B, 1>>,
+}
+
+impl<B> RMSNorm<B>
+where
+    B: Backend,
+{
+    pub fn new(dim: usize, eps: f64, device: &B::Device) -> Self {
+        RMSNorm {
+            eps,
+            weight: Param::from_tensor(Tensor::<B, 1>::ones([dim], device)),
+        }
+    }
+
+    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
+        let normalized_x = normalize(x, self.eps);
+        self.weight.val().unsqueeze::<D>().mul(normalized_x)
+    }
+}
+
+pub fn self_attention<B>(
+    q: Tensor<B, 2>,
+    k: Tensor<B, 2>,
+    v: Tensor<B, 2>,
+    mask: Option<Tensor<B, 2>>,
+) -> Tensor<B, 2>
+where
+    B: Backend,
+{
     todo!()
 }
 
-pub struct RMSNorm {}
-impl RMSNorm {
-    pub fn new(_dim: usize, _eps: f64, _device: &Device) -> Self {
-        todo!()
-    }
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
-        todo!()
-    }
-}
-
-pub fn self_attention(
-    _q: Tensor<B, 2>,
-    _k: Tensor<B, 2>,
-    _v: Tensor<B, 2>,
-    _mask: Option<Tensor<B, 2>>,
-) -> Tensor<B, 2> {
+pub fn self_attention_batched<B>(
+    q: Tensor<B, 4>,
+    k: Tensor<B, 4>,
+    v: Tensor<B, 4>,
+    mask: Option<Tensor<B, 2>>,
+) -> Tensor<B, 4>
+where
+    B: Backend,
+{
     todo!()
 }
 
-pub fn self_attention_batched(
-    _q: Tensor<B, 4>,
-    _k: Tensor<B, 4>,
-    _v: Tensor<B, 4>,
-    _mask: Option<Tensor<B, 2>>,
-) -> Tensor<B, 4> {
-    todo!()
-}
-
-pub struct MultiHeadAttentionKVCache {
+#[derive(Module, Debug)]
+pub struct MultiHeadAttentionKVCache<B: Backend> {
+    pub wq: Linear<B>,
+    // ...
     pub n_heads: usize,
 }
-impl MultiHeadAttentionKVCache {
-    pub fn new(_dim: usize, _n_heads: usize, _max_cache: usize, _device: &Device) -> Self {
+
+impl<B> MultiHeadAttentionKVCache<B>
+where
+    B: Backend,
+{
+    pub fn new(dim: usize, n_heads: usize, max_cache: usize, device: &B::Device) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: Tensor<B, 3>,
-        _mask: Option<Tensor<B, 2>>,
-        _seq_pos: usize,
-        _use_cache: bool,
+        x: Tensor<B, 3>,
+        mask: Option<Tensor<B, 2>>,
+        seq_pos: usize,
+        use_cache: bool,
     ) -> Tensor<B, 3> {
         todo!()
     }
 }
 
-pub struct GatedMLP {}
-impl GatedMLP {
-    pub fn new(_dim: usize, _ffn_dim: usize, _device: &Device) -> Self {
+#[derive(Module, Debug)]
+pub struct GatedMLP<B: Backend> {
+    pub w1: Linear<B>,
+    // ...
+}
+
+impl<B> GatedMLP<B>
+where
+    B: Backend,
+{
+    pub fn new(dim: usize, ffn_dim: usize, device: &B::Device) -> Self {
         todo!()
     }
-    pub fn forward<const D: usize>(&self, _x: Tensor<B, D>) -> Tensor<B, D> {
+    pub fn forward<const D: usize>(&self, x: Tensor<B, D>) -> Tensor<B, D> {
         todo!()
     }
 }
 
-pub struct TransformerBlock {}
-impl TransformerBlock {
+#[derive(Module, Debug)]
+pub struct TransformerBlock<B: Backend> {
+    pub attn: MultiHeadAttentionKVCache<B>,
+    // ...
+}
+
+impl<B> TransformerBlock<B>
+where
+    B: Backend,
+{
     pub fn new(
-        _dim: usize,
-        _n_heads: usize,
-        _ffn_dim: usize,
-        _max_seq: usize,
-        _device: &Device,
+        dim: usize,
+        n_heads: usize,
+        ffn_dim: usize,
+        max_seq: usize,
+        device: &B::Device,
     ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _x: Tensor<B, 3>,
-        _mask: Option<Tensor<B, 2>>,
-        _seq_pos: usize,
-        _use_cache: bool,
+        x: Tensor<B, 3>,
+        mask: Option<Tensor<B, 2>>,
+        seq_pos: usize,
+        use_cache: bool,
     ) -> Tensor<B, 3> {
         todo!()
     }
 }
 
-pub struct Llama3Simplified {}
-impl Llama3Simplified {
+#[derive(Module, Debug)]
+pub struct Llama3Simplified<B: Backend> {
+    pub embedding: Embedding<B>,
+    // ...
+}
+
+impl<B> Llama3Simplified<B>
+where
+    B: Backend,
+{
     pub fn new(
-        _num_tokens: usize,
-        _dim: usize,
-        _n_heads: usize,
-        _max_seq: usize,
-        _ffn_dim: usize,
-        _num_layers: usize,
-        _device: &Device,
+        num_tokens: usize,
+        dim: usize,
+        n_heads: usize,
+        max_seq: usize,
+        ffn_dim: usize,
+        num_layers: usize,
+        device: &B::Device,
     ) -> Self {
         todo!()
     }
     pub fn forward(
         &mut self,
-        _tokens: Tensor<B, 2, Int>,
-        _seq_pos: usize,
-        _use_cache: bool,
+        tokens: Tensor<B, 2, Int>,
+        seq_pos: usize,
+        use_cache: bool,
     ) -> Tensor<B, 3> {
         todo!()
     }
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn generate(
-    _model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
-    _prompt_tokens: &[i32],
-    _decode_fn: &dyn Fn(&[i32]) -> String,
-    _stop_tokens: &[i32],
-    _temp: f64,
-    _max_tokens: usize,
-    _verbose: bool,
+pub fn generate<B: Backend>(
+    model: &mut dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>,
+    prompt_tokens: &[i32],
+    decode_fn: &dyn Fn(&[i32]) -> String,
+    stop_tokens: &[i32],
+    temp: f64,
+    max_tokens: usize,
+    verbose: bool,
 ) -> Vec<i32> {
     todo!()
 }
 
 /// Load the Llama 3.2 simplified model with pretrained weights.
-pub fn eval_llama3() -> Llama3Simplified {
+pub fn eval_llama3<B: Backend>() -> Llama3Simplified<B> {
     todo!()
 }

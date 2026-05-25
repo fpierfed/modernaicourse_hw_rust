@@ -1,9 +1,6 @@
-use burn::backend::ndarray::NdArrayDevice;
 use burn::tensor::{Distribution, Int, Tensor, TensorData};
 use hw4::*;
 use test_support::{as_f32_vec, assert_f32_slice_close, json, python_json};
-
-const DEVICE: NdArrayDevice = NdArrayDevice::Cpu;
 
 fn torch_linear(
     x: Vec<f32>,
@@ -142,8 +139,8 @@ fn test_linear_correctness() {
     let expected = torch_linear(
         x.clone().into_data().to_vec::<f32>().unwrap(),
         x.dims().to_vec(),
-        layer.weight().clone().into_data().to_vec::<f32>().unwrap(),
-        layer.weight().dims().to_vec(),
+        layer.weight.clone().into_data().to_vec::<f32>().unwrap(),
+        layer.weight.dims().to_vec(),
     );
     let actual = out.into_data().to_vec::<f32>().unwrap();
     assert_f32_slice_close(&actual, &expected, 1e-4);
@@ -178,7 +175,7 @@ fn test_embedding_correctness() {
         Tensor::from_data(TensorData::new(vec![0i32, 3, 5], [1, 3]), &DEVICE);
     let out = layer.forward(indices);
     // Each row of output should be the corresponding row of the weight matrix
-    let w = layer.weight().clone();
+    let w = layer.weight.clone();
     let row0: Vec<f32> = w
         .clone()
         .narrow(0, 0, 1)
