@@ -97,6 +97,9 @@ where
 {
     pub fn new(in_dim: usize, out_dim: usize, device: &B::Device) -> Self {
         Linear {
+            // This is a real no-no in general, but this homeworks requires
+            // up to load llama weights and instructs to just zero out the
+            // weights.
             weight: Param::from_tensor(Tensor::<B, 2>::zeros([out_dim, in_dim], device)),
         }
     }
