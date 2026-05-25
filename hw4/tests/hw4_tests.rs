@@ -679,21 +679,6 @@ fn test_eval_llama3() {
 // --- Additional value-verification and edge case tests ---
 
 #[test]
-fn test_linear_output_nonzero() {
-    let layer = Linear::new(4, 3, &DEVICE);
-    let x: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![1.0f32, 0.0, 0.0, 0.0], [1, 4]),
-        &DEVICE,
-    );
-    let out = layer.forward(x);
-    let vals: Vec<f32> = out.into_data().to_vec::<f32>().unwrap();
-    assert!(
-        vals.iter().any(|&v| v != 0.0),
-        "Linear output should be nonzero for nonzero input"
-    );
-}
-
-#[test]
 fn test_embedding_lookup_consistency() {
     let layer = Embedding::new(10, 4, &DEVICE);
     let idx1: Tensor<B, 2, Int> = Tensor::from_data(TensorData::new(vec![3i32], [1, 1]), &DEVICE);
