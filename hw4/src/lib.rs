@@ -62,7 +62,7 @@
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
-use burn::tensor::activation::sigmoid;
+use burn::tensor::activation::{sigmoid, softmax};
 use burn::tensor::backend::Backend;
 
 #[cfg(feature = "cuda")]
@@ -186,34 +186,189 @@ where
     }
 }
 
-pub fn self_attention<B>(
-    q: Tensor<B, 2>,
-    k: Tensor<B, 2>,
-    v: Tensor<B, 2>,
+// pub fn self_attention<B>(
+//     q: Tensor<B, 2>,
+//     k: Tensor<B, 2>,
+//     v: Tensor<B, 2>,
+//     mask: Option<Tensor<B, 2>>,
+// ) -> Tensor<B, 2>
+// where
+//     B: Backend,
+// {
+//     let [_, d] = q.dims();
+//     let sqrt_d = (d as f32).sqrt();
+//
+//     if let Some(m) = mask {
+//         softmax(q.matmul(k.transpose()).div_scalar(sqrt_d).add(m), 1).matmul(v)
+//     } else {
+//         softmax(q.matmul(k.transpose()).div_scalar(sqrt_d), 1).matmul(v)
+//     }
+// }
+//
+// pub fn self_attention_batched<B>(
+//     q: Tensor<B, 4>,
+//     k: Tensor<B, 4>,
+//     v: Tensor<B, 4>,
+//     mask: Option<Tensor<B, 2>>,
+// ) -> Tensor<B, 4>
+// where
+//     B: Backend,
+// {
+//     let dims = q.dims();
+//     let d = dims[dims.len() - 1];
+//     let sqrt_d = (d as f32).sqrt();
+//
+//     let last_index = dims.len() - 1;
+//     let second_to_last_index = dims.len() - 2;
+//
+//     // Here we do not have  the handy-dandy PyTorch k.mT that only
+//     // transposes the last two dimensions, so we have to make do...
+//     if let Some(m) = mask {
+//         softmax(
+//             q.matmul(k.swap_dims(second_to_last_index, last_index))
+//                 .div_scalar(sqrt_d)
+//                 .add(m.unsqueeze::<4>()),
+//             last_index,
+//         )
+//         .matmul(v)
+//     } else {
+//         softmax(
+//             q.matmul(k.swap_dims(second_to_last_index, last_index))
+//                 .div_scalar(sqrt_d),
+//             last_index,
+//         )
+//         .matmul(v)
+//     }
+// }
+
+pub fn self_attention<B, const D: usize>(
+    q: Tensor<B, D>,
+    k: Tensor<B, D>,
+    v: Tensor<B, D>,
     mask: Option<Tensor<B, 2>>,
-) -> Tensor<B, 2>
+) -> Tensor<B, D>
 where
     B: Backend,
 {
-    todo!()
+    const { assert!(D >= 2, "Expecting at least 2D tensors!") };
+
+    let dims = q.dims();
+    let d = dims[dims.len() - 1];
+    let sqrt_d = (d as f32).sqrt();
+
+    let last_index = dims.len() - 1;
+    let second_to_last_index = dims.len() - 2;
+
+    // Here we do not have  the handy-dandy PyTorch k.mT that only
+    // transposes the last two dimensions, so we have to make do...
+    if let Some(m) = mask {
+        softmax(
+            q.matmul(k.swap_dims(second_to_last_index, last_index))
+                .div_scalar(sqrt_d)
+                .add(m.unsqueeze::<D>()),
+            last_index,
+        )
+        .matmul(v)
+    } else {
+        softmax(
+            q.matmul(k.swap_dims(second_to_last_index, last_index))
+                .div_scalar(sqrt_d),
+            last_index,
+        )
+        .matmul(v)
+    }
 }
 
-pub fn self_attention_batched<B>(
-    q: Tensor<B, 4>,
-    k: Tensor<B, 4>,
-    v: Tensor<B, 4>,
-    mask: Option<Tensor<B, 2>>,
-) -> Tensor<B, 4>
+#[derive(Module, Debug)]
+pub struct MultiHeadAttention<B: Backend> {
+    pub wq: Linear<B>,
+    pub wk: Linear<B>,
+    pub wv: Linear<B>,
+    pub wp: Linear<B>,
+    pub n_heads: usize,
+}
+
+impl<B> MultiHeadAttention<B>
 where
     B: Backend,
 {
-    todo!()
+    pub fn new(dim: usize, n_heads: usize, max_cache: usize, device: &B::Device) -> Self {
+        MultiHeadAttention {
+            wq: Linear::new(dim, dim, device),
+            wk: Linear::new(dim, dim, device),
+            wv: Linear::new(dim, dim, device),
+            wp: Linear::new(dim, dim, device),
+            n_heads,
+        }
+    }
+
+    pub fn forward(
+        &mut self,
+        x: Tensor<B, 3>,
+        mask: Option<Tensor<B, 2>>,
+        seq_pos: usize,
+        use_cache: bool,
+    ) -> Tensor<B, 3> {
+        let q = self.wq.forward(x.clone());
+        let k = self.wk.forward(x.clone());
+        let v = self.wv.forward(x.clone());
+
+        let [batch_size, seq_len, dim] = q.dims();
+        let head_dim = dim / self.n_heads;
+        let new_dims = [batch_size, seq_len, self.n_heads, head_dim];
+
+        // Need to use transpose on seq_len, self.n_heads to be able to
+        // iterate over the head blocks.
+        // To be pedantic:
+        // X = torch.tensor([[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12], [13, 14, 15, 16, 17, 18], [19, 20, 21, 22, 23, 24], [25, 26, 27, 28, 29, 30]])
+        // print(X)
+        // tensor([[ 1,  2,  3,  4,  5,  6],
+        //         [ 7,  8,  9, 10, 11, 12],
+        //         [13, 14, 15, 16, 17, 18],
+        //         [19, 20, 21, 22, 23, 24],
+        //         [25, 26, 27, 28, 29, 30]])
+        // print(X.shape)
+        // torch.Size([5, 6])
+        // X = X.reshape(5, 3, 2).transpose(0, 1)
+        // print(X)
+        // tensor([[[ 1,  2],
+        //          [ 7,  8],
+        //          [13, 14],
+        //          [19, 20],
+        //          [25, 26]],
+        //
+        //         [[ 3,  4],
+        //          [ 9, 10],
+        //          [15, 16],
+        //          [21, 22],
+        //          [27, 28]],
+        //
+        //         [[ 5,  6],
+        //          [11, 12],
+        //          [17, 18],
+        //          [23, 24],
+        //          [29, 30]]])
+        //
+        // In our case, we just have an extra leading dimension, batch_size
+        let reshaped_q = q.reshape(new_dims).swap_dims(1, 2);
+        let reshaped_k = k.reshape(new_dims).swap_dims(1, 2);
+        let reshaped_v = v.reshape(new_dims).swap_dims(1, 2);
+
+        // Process all batches
+        let y = self_attention(reshaped_q, reshaped_k, reshaped_v, mask);
+
+        // Go back to old dimensions, undo all operations in reverse.
+        self.wp
+            .forward(y.swap_dims(1, 2).reshape([batch_size, seq_len, dim]))
+    }
 }
 
 #[derive(Module, Debug)]
 pub struct MultiHeadAttentionKVCache<B: Backend> {
     pub wq: Linear<B>,
-    // ...
+    pub wk: Linear<B>,
+    pub wv: Linear<B>,
+    pub wp: Linear<B>,
     pub n_heads: usize,
 }
 
@@ -224,6 +379,7 @@ where
     pub fn new(dim: usize, n_heads: usize, max_cache: usize, device: &B::Device) -> Self {
         todo!()
     }
+
     pub fn forward(
         &mut self,
         x: Tensor<B, 3>,
