@@ -59,6 +59,8 @@
  * 4. Stop at stop_tokens or max_tokens
  */
 
+use core::f32;
+
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
 use burn::prelude::*;
@@ -529,7 +531,10 @@ where
 pub struct Llama3Simplified<B: Backend> {
     pub embedding: Embedding<B>,
     pub pos_embeddings: Param<Tensor<B, 2>>,
-    // ...
+    pub layers: Vec<TransformerBlock<B>>,
+    pub norm: RMSNorm<B>,
+    pub output: Linear<B>,
+    pub mask: Tensor<B, 2>,
 }
 
 impl<B> Llama3Simplified<B>
@@ -545,15 +550,46 @@ where
         num_layers: usize,
         device: &B::Device,
     ) -> Self {
-        todo!()
+        Llama3Simplified {
+            embedding: Embedding::new(num_tokens, dim, device),
+            pos_embeddings: Param::from_tensor(Tensor::<B, 2>::zeros([max_seq, dim], device)),
+            layers: vec![TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device); num_layers],
+            norm: RMSNorm::new(dim, EPSILON, device),
+            output: Linear::new(dim, num_tokens, device),
+            mask: Tensor::<B, 2>::full([max_seq, max_seq], f32::NEG_INFINITY, device).triu(1),
+        }
     }
+
     pub fn forward(
         &mut self,
         tokens: Tensor<B, 2, Int>,
         seq_pos: usize,
         use_cache: bool,
     ) -> Tensor<B, 3> {
-        todo!()
+        let mut res = self.embedding.forward(tokens);
+        let dim = self.pos_embeddings.dims()[1];
+        let rdim = res.dims()[1];
+
+        // Unsqueeze(0) is needed to ensure broadcast along the batch dim.
+        res = res
+            + self
+                .pos_embeddings
+                .val()
+                .slice([seq_pos..seq_pos + rdim, 0..dim])
+                .unsqueeze();
+
+        let mstart = seq_pos;
+        let mend = seq_pos + rdim;
+        for layer in self.layers.iter() {
+            let mut layer = layer.clone();
+            res = layer.forward(
+                res.clone(),
+                Some(self.mask.clone().slice([mstart..mend, 0..mend])),
+                seq_pos,
+                use_cache,
+            );
+        }
+        self.output.forward(self.norm.forward(res))
     }
 }
 
