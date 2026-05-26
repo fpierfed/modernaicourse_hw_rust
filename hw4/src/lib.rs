@@ -420,10 +420,12 @@ where
 
         if use_cache {
             let (start, end) = (seq_pos, seq_pos + seq_len);
-            self.k_cache
+            self.k_cache = self
+                .k_cache
                 .clone()
                 .slice_assign([0..1, start..end, 0..dim], k);
-            self.v_cache
+            self.v_cache = self
+                .v_cache
                 .clone()
                 .slice_assign([0..1, start..end, 0..dim], v);
             working_k = self.k_cache.clone().slice([0..1, 0..end, 0..dim]);
@@ -526,6 +528,7 @@ where
 #[derive(Module, Debug)]
 pub struct Llama3Simplified<B: Backend> {
     pub embedding: Embedding<B>,
+    pub pos_embeddings: Param<Tensor<B, 2>>,
     // ...
 }
 

@@ -506,7 +506,7 @@ fn test_mha_kvcache_consistency() {
     assert_eq!(full.dims(), [1, 5, 12]);
 
     // Reset by creating new instance with same weights
-    let mut attn2 = MultiHeadAttentionKVCache::new(12, 3, 8, &DEVICE);
+    let mut attn2 = attn.clone();
     let prefix_mask = causal_mask(3);
     let prefix = attn2.forward(x.clone().narrow(1, 0, 3), Some(prefix_mask), 0, true);
 
