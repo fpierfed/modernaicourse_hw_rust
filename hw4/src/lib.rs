@@ -60,6 +60,7 @@
  */
 
 use core::f32;
+use std::path::{Path, PathBuf};
 
 use burn::backend::Autodiff;
 use burn::module::{Module, Param};
@@ -67,6 +68,11 @@ use burn::prelude::*;
 use burn::tensor::activation::{sigmoid, softmax};
 use burn::tensor::backend::Backend;
 use burn::tensor::Distribution;
+
+use burn::tensor::FloatDType;
+use burn_store::pytorch::PytorchReader;
+use hf_hub::api::sync::Api;
+use serde::Deserialize;
 
 #[cfg(feature = "cuda")]
 pub type MyBackend = burn::backend::Cuda<f32, i32>;
@@ -87,8 +93,10 @@ pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::wgpu::WgpuDevice::D
 pub const DEVICE: Device<MyAutodiffBackend> = burn::backend::ndarray::NdArrayDevice::Cpu;
 
 pub type MyAutodiffBackend = Autodiff<MyBackend>;
+pub type AnyError = Box<dyn std::error::Error>;
 
 const EPSILON: f64 = 1.0e-5;
+const LLAMA3_REPO: &str = "zkolter/Llama-3.2-1B-Instruct-Simplified";
 
 #[derive(Module, Debug)]
 pub struct Linear<B: Backend> {
@@ -527,6 +535,36 @@ where
     }
 }
 
+// Checkpoint loading code
+#[derive(Deserialize)]
+struct LlamaParams {
+    vocab_size: usize,
+    dim: usize,
+    n_heads: usize,
+    max_seq_len: usize,
+    ffn_dim_multiplier: f64,
+    n_layers: usize,
+}
+
+fn load_param<B: Backend, const D: usize>(
+    reader: &PytorchReader,
+    key: &str,
+    device: &B::Device,
+) -> Result<Param<Tensor<B, D>>, AnyError> {
+    let snapshot = reader.get(key).ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("missing checkpoint tensor {key}"),
+        )
+    })?;
+
+    let data = snapshot.to_data()?;
+
+    Ok(Param::from_tensor(
+        Tensor::<B, D>::from_data(data, device).cast(FloatDType::F32),
+    ))
+}
+
 #[derive(Module, Debug)]
 pub struct Llama3Simplified<B: Backend> {
     pub embedding: Embedding<B>,
@@ -580,8 +618,7 @@ where
 
         let mstart = seq_pos;
         let mend = seq_pos + rdim;
-        for layer in self.layers.iter() {
-            let mut layer = layer.clone();
+        for layer in self.layers.iter_mut() {
             res = layer.forward(
                 res.clone(),
                 Some(self.mask.clone().slice([mstart..mend, 0..mend])),
@@ -590,6 +627,51 @@ where
             );
         }
         self.output.forward(self.norm.forward(res))
+    }
+
+    pub fn load_llama_weights(
+        &mut self,
+        reader: &PytorchReader,
+        device: &B::Device,
+    ) -> Result<(), AnyError> {
+        self.embedding.weight = load_param(reader, "tok_embeddings.weight", device)?;
+        self.pos_embeddings = load_param(reader, "pos_embeddings.weight", device)?;
+        self.norm.weight = load_param(reader, "norm.weight", device)?;
+        self.output.weight = load_param(reader, "output.weight", device)?;
+
+        for (i, layer) in self.layers.iter_mut().enumerate() {
+            layer.attn.wq.weight =
+                load_param(reader, &format!("layers.{i}.attention.wq.weight"), device)?;
+            layer.attn.wk.weight =
+                load_param(reader, &format!("layers.{i}.attention.wk.weight"), device)?;
+            layer.attn.wv.weight =
+                load_param(reader, &format!("layers.{i}.attention.wv.weight"), device)?;
+            layer.attn.wp.weight =
+                load_param(reader, &format!("layers.{i}.attention.wo.weight"), device)?;
+
+            layer.mlp.w1.weight = load_param(
+                reader,
+                &format!("layers.{i}.feed_forward.w1.weight"),
+                device,
+            )?;
+            layer.mlp.w2.weight = load_param(
+                reader,
+                &format!("layers.{i}.feed_forward.w2.weight"),
+                device,
+            )?;
+            layer.mlp.w3.weight = load_param(
+                reader,
+                &format!("layers.{i}.feed_forward.w3.weight"),
+                device,
+            )?;
+
+            layer.norm1.weight =
+                load_param(reader, &format!("layers.{i}.attention_norm.weight"), device)?;
+            layer.norm2.weight =
+                load_param(reader, &format!("layers.{i}.ffn_norm.weight"), device)?;
+        }
+
+        Ok(())
     }
 }
 
@@ -603,10 +685,86 @@ pub fn generate<B: Backend>(
     max_tokens: usize,
     verbose: bool,
 ) -> Vec<i32> {
-    todo!()
+    let device = B::Device::default();
+
+    let mut out_tokens: Vec<i32> = vec![];
+    let prompt = Tensor::<B, 1, Int>::from_data(prompt_tokens, &device).unsqueeze::<2>();
+
+    let mut logits = model(prompt, 0, true);
+
+    for _ in 0..max_tokens {
+        let [_batch_size, seq_len, vocab_size] = logits.dims();
+
+        let last_logits = logits
+            .clone()
+            .narrow(1, seq_len - 1, 1)
+            .reshape([1, vocab_size]);
+        let next_token = if temp == 0.0 {
+            last_logits.argmax(1)
+        } else {
+            let probs = softmax(last_logits.div_scalar(temp), 1);
+            probs.categorical(1)
+        }
+        .into_data()
+        .to_vec::<i32>()
+        .unwrap()[0];
+
+        out_tokens.push(next_token);
+
+        if verbose {
+            print!("{}", decode_fn(&[next_token]));
+        }
+
+        if stop_tokens.contains(&next_token) {
+            break;
+        }
+
+        let next_input = Tensor::<B, 1, Int>::from_data([next_token], &device).unsqueeze::<2>();
+        let seq_pos = prompt_tokens.len() + out_tokens.len() - 1;
+        logits = model(next_input, seq_pos, true);
+    }
+    out_tokens
 }
 
 /// Load the Llama 3.2 simplified model with pretrained weights.
+pub fn download_llama3_paths() -> Result<(PathBuf, PathBuf), AnyError> {
+    let repo = Api::new()?.model(LLAMA3_REPO.to_string());
+
+    let checkpoint = repo.get("consolidated.00.pth")?;
+    let params = repo.get("params.json")?;
+
+    Ok((checkpoint, params))
+}
+
+pub fn eval_llama3_from_paths<B: Backend>(
+    checkpoint_path: impl AsRef<Path>,
+    params_path: impl AsRef<Path>,
+    device: &B::Device,
+) -> Result<Llama3Simplified<B>, AnyError> {
+    let params_file = std::fs::File::open(params_path)?;
+    let params: LlamaParams = serde_json::from_reader(params_file)?;
+
+    let ffn_dim = (params.dim as f64 * params.ffn_dim_multiplier).round() as usize;
+
+    let mut model = Llama3Simplified::new(
+        params.vocab_size,
+        params.dim,
+        params.n_heads,
+        params.max_seq_len,
+        ffn_dim,
+        params.n_layers,
+        device,
+    );
+
+    let reader = PytorchReader::new(checkpoint_path)?;
+    model.load_llama_weights(&reader, device)?;
+
+    Ok(model)
+}
+
 pub fn eval_llama3<B: Backend>() -> Llama3Simplified<B> {
-    todo!()
+    let device = B::Device::default();
+    let (checkpoint, params) = download_llama3_paths().expect("failed to download Llama3 files");
+
+    eval_llama3_from_paths::<B>(checkpoint, params, &device).expect("failed to load Llama3 weights")
 }
