@@ -618,13 +618,9 @@ where
 
         let mstart = seq_pos;
         let mend = seq_pos + rdim;
+        let mask_slice = self.mask.clone().slice([mstart..mend, 0..mend]);
         for layer in self.layers.iter_mut() {
-            res = layer.forward(
-                res.clone(),
-                Some(self.mask.clone().slice([mstart..mend, 0..mend])),
-                seq_pos,
-                use_cache,
-            );
+            res = layer.forward(res.clone(), Some(mask_slice.clone()), seq_pos, use_cache);
         }
         self.output.forward(self.norm.forward(res))
     }
