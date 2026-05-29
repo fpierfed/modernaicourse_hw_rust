@@ -13,6 +13,8 @@ members = [
 resolver = "2"
 
 [workspace.dependencies]
+candle-core = "0.10.2"
+candle-nn = "0.10.2"
 approx = "0.5.1"
 rand = "0.10.1"
 rand_distr = "0.6.0"
