@@ -60,6 +60,7 @@
  */
 
 use core::f32;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use rand::distr::weighted::WeightedIndex;
@@ -171,12 +172,7 @@ impl RMSNorm {
     }
 }
 
-pub fn self_attention(
-    q: &Tensor,
-    k: &Tensor,
-    v: &Tensor,
-    mask: Option<&Tensor>,
-) -> Result<Tensor> {
+pub fn self_attention(q: &Tensor, k: &Tensor, v: &Tensor, mask: Option<&Tensor>) -> Result<Tensor> {
     let d = *q.dims().last().unwrap();
     let sqrt_d = (d as f64).sqrt();
 
@@ -614,6 +610,7 @@ pub fn generate(
         out_tokens.push(next_token);
         if verbose {
             print!("{}", decode_fn(&[next_token]));
+            std::io::stdout().flush().ok();
         }
         if stop_tokens.contains(&next_token) {
             break;
