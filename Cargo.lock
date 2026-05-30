@@ -3703,7 +3703,6 @@ dependencies = [
 name = "hw4"
 version = "0.1.0"
 dependencies = [
- "approx",
  "candle-core",
  "candle-nn",
  "hf-hub",

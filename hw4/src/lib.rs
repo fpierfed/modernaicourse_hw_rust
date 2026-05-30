@@ -59,7 +59,6 @@
  * 4. Stop at stop_tokens or max_tokens
  */
 
-use core::f32;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
@@ -99,10 +98,9 @@ type Float = f32;
 
 #[derive(Clone, Debug)]
 pub struct Linear {
-    // Stored pre-transposed (matmul-ready) as [in_dim, out_dim] so that
-    // forward is a single contiguous matmul with no per-call transpose.
-    // The PyTorch checkpoint stores weights as [out_dim, in_dim]; we
-    // transpose once at load time in `load_pretrained`.
+    // Stored pre-transposed as [in_dim, out_dim] so forward is a single
+    // contiguous matmul with no per-call transpose. The PyTorch checkpoint
+    // stores weights as [out_dim, in_dim]; we transpose once at load time.
     pub weight: Tensor,
 }
 
@@ -132,9 +130,9 @@ impl Embedding {
     }
 
     pub fn forward(&self, indices: &Tensor) -> Result<Tensor> {
-        // Candle's Tensor::embedding requires a 1-D index tensor, so we
-        // flatten, look up, and reshape back to the original shape with an
-        // extra trailing `dim` axis.
+        // Candle's Tensor::embedding requires a 1-D index tensor; flatten,
+        // look up, and reshape back to the original shape with an extra
+        // trailing `dim` axis.
         let mut out_dims = indices.dims().to_vec();
         out_dims.push(self.weight.dim(1)?);
         self.weight
@@ -162,11 +160,6 @@ impl RMSNorm {
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        // this is w * x / sqrt(x*x + eps) == w * normalized(x) :-)
-        //
-        // In PyTorch
-        //  self.weight * x / torch.sqrt(x.pow(2).mean(dim=-1, keepdim=True) + self.eps)
-        //
         let rms = (x.sqr()?.mean_keepdim(D::Minus1)? + self.eps as f64)?.sqrt()?;
         self.weight.broadcast_mul(x)?.broadcast_div(&rms)
     }
@@ -184,6 +177,24 @@ pub fn self_attention(q: &Tensor, k: &Tensor, v: &Tensor, mask: Option<&Tensor>)
         None => scaled,
     };
     softmax(&scores, D::Minus1)?.matmul(v)
+}
+
+/// Reshape `[batch, seq, dim]` into `[batch, n_heads, seq, head_dim]`,
+/// transposing and making contiguous for the subsequent matmul.
+fn split_heads(x: &Tensor, batch: usize, seq: usize, n_heads: usize) -> Result<Tensor> {
+    let dim = x.dim(D::Minus1)?;
+    let head_dim = dim / n_heads;
+    x.reshape((batch, seq, n_heads, head_dim))?
+        .transpose(1, 2)?
+        .contiguous()
+}
+
+/// Reverse of `split_heads`: `[batch, n_heads, seq, head_dim]` back to
+/// `[batch, seq, dim]`.
+fn merge_heads(x: &Tensor, batch: usize, seq: usize, dim: usize) -> Result<Tensor> {
+    x.transpose(1, 2)?
+        .contiguous()?
+        .reshape((batch, seq, dim))
 }
 
 #[derive(Clone, Debug)]
@@ -206,51 +217,27 @@ impl MultiHeadAttention {
         })
     }
 
-    // Note that `seq_pos` and `use_cache` are not used here, just like
-    // in the Python version.
-    #[allow(unused_variables)]
     pub fn forward(
         &mut self,
         x: &Tensor,
         mask: Option<&Tensor>,
-        seq_pos: usize,
-        use_cache: bool,
+        _seq_pos: usize,
+        _use_cache: bool,
     ) -> Result<Tensor> {
         let q = self.wq.forward(x)?;
         let k = self.wk.forward(x)?;
         let v = self.wv.forward(x)?;
 
         let (batch_size, seq_len, dim) = x.dims3()?;
-        let head_dim = dim / self.n_heads;
 
-        // Need to use transpose on seq_len, self.n_heads to be able to
-        // iterate over the head blocks.
-        // Process all batches
-
-        // Since we pass this to matmul we need to *copy* the data to a
-        // contiguous block of memory.
-
-        let q = q
-            .reshape((batch_size, seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let k = k
-            .reshape((batch_size, seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let v = v
-            .reshape((batch_size, seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        let q = split_heads(&q, batch_size, seq_len, self.n_heads)?;
+        let k = split_heads(&k, batch_size, seq_len, self.n_heads)?;
+        let v = split_heads(&v, batch_size, seq_len, self.n_heads)?;
 
         let y = self_attention(&q, &k, &v, mask)?;
 
-        // Go back to old dimensions, undo all operations in reverse.
-        self.wp.forward(
-            &y.transpose(1, 2)?
-                .contiguous()?
-                .reshape((batch_size, seq_len, dim))?,
-        )
+        self.wp
+            .forward(&merge_heads(&y, batch_size, seq_len, dim)?)
     }
 }
 
@@ -294,10 +281,8 @@ impl MultiHeadAttentionKVCache {
         let v = self.wv.forward(x)?;
 
         let (batch_size, seq_len, dim) = x.dims3()?;
-        let head_dim = dim / self.n_heads;
 
         let (working_k, working_v) = if use_cache {
-            // In-place update, no copying or allocations.
             self.k_cache.slice_set(&k, 1, seq_pos)?;
             self.v_cache.slice_set(&v, 1, seq_pos)?;
 
@@ -310,35 +295,16 @@ impl MultiHeadAttentionKVCache {
             (k.clone(), v.clone())
         };
 
-        // Need to use transpose on seq_len, self.n_heads to be able to
-        // iterate over the head blocks.
-        // Process all batches
         let kv_seq_len = working_k.dim(1)?;
 
-        // Since we pass this to matmul we need to *copy* the data to a
-        // contiguous block of memory.
-
-        let q = q
-            .reshape((batch_size, seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let working_k = working_k
-            .reshape((batch_size, kv_seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
-        let working_v = working_v
-            .reshape((batch_size, kv_seq_len, self.n_heads, head_dim))?
-            .transpose(1, 2)?
-            .contiguous()?;
+        let q = split_heads(&q, batch_size, seq_len, self.n_heads)?;
+        let working_k = split_heads(&working_k, batch_size, kv_seq_len, self.n_heads)?;
+        let working_v = split_heads(&working_v, batch_size, kv_seq_len, self.n_heads)?;
 
         let y = self_attention(&q, &working_k, &working_v, mask)?;
 
-        // Go back to old dimensions, undo all operations in reverse.
-        self.wp.forward(
-            &y.transpose(1, 2)?
-                .contiguous()?
-                .reshape((batch_size, seq_len, dim))?,
-        )
+        self.wp
+            .forward(&merge_heads(&y, batch_size, seq_len, dim)?)
     }
 }
 
@@ -360,8 +326,7 @@ impl GatedMLP {
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
         let gate = silu(&self.w1.forward(x)?)?;
         let up = self.w3.forward(x)?;
-        let h = (gate * up)?;
-        self.w2.forward(&h)
+        self.w2.forward(&(gate * up)?)
     }
 }
 
@@ -405,12 +370,11 @@ impl TransformerBlock {
     }
 }
 
-fn build_causal_mask(n: usize, device: &Device) -> Result<Tensor> {
+pub fn build_causal_mask(n: usize, device: &Device) -> Result<Tensor> {
     let mut data = vec![0f32; n * n];
-    for i in 0..n {
-        for j in (i + 1)..n {
-            data[i * n + j] = Float::NEG_INFINITY;
-        }
+    for row in data.chunks_exact_mut(n).enumerate() {
+        let (i, chunk) = row;
+        chunk[i + 1..].fill(f32::NEG_INFINITY);
     }
     Tensor::from_vec(data, (n, n), device)
 }
@@ -486,74 +450,93 @@ impl Llama3Simplified {
     ) -> Result<Self> {
         let vb = VarBuilder::from_pth(checkpoint_path, DType::F32, device)?;
 
-        let dim = params.dim;
-        let n_heads = params.n_heads;
-        let n_layers = params.n_layers;
-        let max_seq = params.max_seq_len;
-        let vocab = params.vocab_size;
         let ffn_dim = (params.dim as f64 * params.ffn_dim_multiplier).round() as usize;
 
         // Causal mask is computed locally — not stored in the checkpoint.
-        let mask = build_causal_mask(max_seq, device)?;
+        let mask = build_causal_mask(params.max_seq_len, device)?;
 
         let embedding = Embedding {
-            weight: vb.get((vocab, dim), "tok_embeddings.weight")?,
+            weight: vb.get((params.vocab_size, params.dim), "tok_embeddings.weight")?,
         };
-        let pos_embeddings = vb.get((max_seq, dim), "pos_embeddings.weight")?;
+        let pos_embeddings = vb.get((params.max_seq_len, params.dim), "pos_embeddings.weight")?;
         let norm = RMSNorm {
-            eps: 1e-5,
-            weight: vb.get(dim, "norm.weight")?,
+            eps: EPSILON,
+            weight: vb.get(params.dim, "norm.weight")?,
         };
         let output = Linear {
-            weight: vb.get((vocab, dim), "output.weight")?.t()?.contiguous()?,
+            weight: vb
+                .get((params.vocab_size, params.dim), "output.weight")?
+                .t()?
+                .contiguous()?,
         };
 
-        let mut layers = Vec::with_capacity(n_layers);
-        for i in 0..n_layers {
-            let lvb = vb.pp(format!("layers.{i}"));
-            let avb = lvb.pp("attention");
-            let fvb = lvb.pp("feed_forward");
+        let mut layers = Vec::with_capacity(params.n_layers);
+        for i in 0..params.n_layers {
+            let layer_vb = vb.pp(format!("layers.{i}"));
+            let attn_vb = layer_vb.pp("attention");
+            let ffn_vb = layer_vb.pp("feed_forward");
 
             let attn = MultiHeadAttentionKVCache {
                 wq: Linear {
-                    weight: avb.get((dim, dim), "wq.weight")?.t()?.contiguous()?,
+                    weight: attn_vb
+                        .get((params.dim, params.dim), "wq.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
                 wk: Linear {
-                    weight: avb.get((dim, dim), "wk.weight")?.t()?.contiguous()?,
+                    weight: attn_vb
+                        .get((params.dim, params.dim), "wk.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
                 wv: Linear {
-                    weight: avb.get((dim, dim), "wv.weight")?.t()?.contiguous()?,
+                    weight: attn_vb
+                        .get((params.dim, params.dim), "wv.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
                 wp: Linear {
-                    weight: avb.get((dim, dim), "wo.weight")?.t()?.contiguous()?,
+                    weight: attn_vb
+                        .get((params.dim, params.dim), "wo.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
-                n_heads,
-                max_cache_size: max_seq,
-                k_cache: Tensor::zeros((1, max_seq, dim), DType::F32, device)?,
-                v_cache: Tensor::zeros((1, max_seq, dim), DType::F32, device)?,
+                n_heads: params.n_heads,
+                max_cache_size: params.max_seq_len,
+                k_cache: Tensor::zeros((1, params.max_seq_len, params.dim), DType::F32, device)?,
+                v_cache: Tensor::zeros((1, params.max_seq_len, params.dim), DType::F32, device)?,
             };
 
             let mlp = GatedMLP {
                 w1: Linear {
-                    weight: fvb.get((ffn_dim, dim), "w1.weight")?.t()?.contiguous()?,
+                    weight: ffn_vb
+                        .get((ffn_dim, params.dim), "w1.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
                 w2: Linear {
-                    weight: fvb.get((dim, ffn_dim), "w2.weight")?.t()?.contiguous()?,
+                    weight: ffn_vb
+                        .get((params.dim, ffn_dim), "w2.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
                 w3: Linear {
-                    weight: fvb.get((ffn_dim, dim), "w3.weight")?.t()?.contiguous()?,
+                    weight: ffn_vb
+                        .get((ffn_dim, params.dim), "w3.weight")?
+                        .t()?
+                        .contiguous()?,
                 },
             };
 
             layers.push(TransformerBlock {
                 attn,
                 norm1: RMSNorm {
-                    eps: 1e-5,
-                    weight: lvb.get(dim, "attention_norm.weight")?,
+                    eps: EPSILON,
+                    weight: layer_vb.get(params.dim, "attention_norm.weight")?,
                 },
                 norm2: RMSNorm {
-                    eps: 1e-5,
-                    weight: lvb.get(dim, "ffn_norm.weight")?,
+                    eps: EPSILON,
+                    weight: layer_vb.get(params.dim, "ffn_norm.weight")?,
                 },
                 mlp,
             });
@@ -570,15 +553,19 @@ impl Llama3Simplified {
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// Configuration for autoregressive generation.
+pub struct GenerateConfig<'a> {
+    pub decode_fn: &'a dyn Fn(&[u32]) -> String,
+    pub stop_tokens: &'a [u32],
+    pub temperature: f64,
+    pub max_tokens: usize,
+    pub verbose: bool,
+}
+
 pub fn generate(
     model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
     prompt_tokens: &[u32],
-    decode_fn: &dyn Fn(&[u32]) -> String,
-    stop_tokens: &[u32],
-    temperature: f64,
-    max_tokens: usize,
-    verbose: bool,
+    config: &GenerateConfig,
     device: &Device,
 ) -> Result<Vec<u32>> {
     let mut rng = rand::rng();
@@ -588,17 +575,17 @@ pub fn generate(
     let prompt = Tensor::from_vec(prompt_tokens.to_vec(), (1, prompt_tokens.len()), device)?;
     let mut logits = model(&prompt, 0, true)?;
 
-    for _ in 0..max_tokens {
+    for _ in 0..config.max_tokens {
         // logits shape: [1, seq_len, vocab]. Take the last position.
         let last_seq = logits.dim(1)?;
         let last = logits.narrow(1, last_seq - 1, 1)?.squeeze(1)?; // [1, vocab]
 
-        let next_token: u32 = if temperature == 0.0 {
+        let next_token: u32 = if config.temperature == 0.0 {
             // Greedy
             last.argmax(D::Minus1)?.to_vec1::<u32>()?[0]
         } else {
             // Temperature sampling
-            let scaled = (last / temperature)?;
+            let scaled = (last / config.temperature)?;
             let probs = softmax(&scaled, D::Minus1)?
                 .to_vec2::<f32>()?
                 .pop()
@@ -608,11 +595,11 @@ pub fn generate(
         };
 
         out_tokens.push(next_token);
-        if verbose {
-            print!("{}", decode_fn(&[next_token]));
+        if config.verbose {
+            print!("{}", (config.decode_fn)(&[next_token]));
             std::io::stdout().flush().ok();
         }
-        if stop_tokens.contains(&next_token) {
+        if config.stop_tokens.contains(&next_token) {
             break;
         }
 
@@ -624,18 +611,19 @@ pub fn generate(
     Ok(out_tokens)
 }
 
-/// Load the Llama 3.2 simplified model with pretrained weights.
-fn err_to_candle<E: std::fmt::Display>(e: E) -> candle_core::Error {
+// ---- Model download helpers ------------------------------------------------
+
+fn to_candle_err<E: std::fmt::Display>(e: E) -> candle_core::Error {
     candle_core::Error::Msg(e.to_string())
 }
 
 pub fn download_llama3_paths() -> Result<(PathBuf, PathBuf)> {
     let repo = Api::new()
-        .map_err(err_to_candle)?
+        .map_err(to_candle_err)?
         .model(LLAMA3_REPO.to_string());
 
-    let checkpoint = repo.get("consolidated.00.pth").map_err(err_to_candle)?;
-    let params = repo.get("params.json").map_err(err_to_candle)?;
+    let checkpoint = repo.get("consolidated.00.pth").map_err(to_candle_err)?;
+    let params = repo.get("params.json").map_err(to_candle_err)?;
 
     Ok((checkpoint, params))
 }
@@ -646,7 +634,7 @@ pub fn eval_llama3_from_paths(
     device: &Device,
 ) -> Result<Llama3Simplified> {
     let params_file = std::fs::File::open(params_path)?;
-    let params: LlamaParams = serde_json::from_reader(params_file).map_err(err_to_candle)?;
+    let params: LlamaParams = serde_json::from_reader(params_file).map_err(to_candle_err)?;
 
     Llama3Simplified::load_pretrained(&params, checkpoint_path.as_ref(), device)
 }

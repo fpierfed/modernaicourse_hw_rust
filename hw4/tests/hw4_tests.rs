@@ -1,29 +1,7 @@
 //! Tests for hw4 — Candle version.
 //!
-//! These tests assume the lib.rs migration described in `candle_migration.md`
-//! has been completed, with the following two adjustments to keep the test
-//! surface identical to the Burn version:
-//!
-//! 1. `generate` accepts a closure rather than a concrete model:
-//!
-//!    ```ignore
-//!    pub fn generate(
-//!        model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-//!        prompt_tokens: &[u32],
-//!        decode_fn: &dyn Fn(&[u32]) -> String,
-//!        stop_tokens: &[u32],
-//!        temperature: f64,
-//!        max_tokens: usize,
-//!        verbose: bool,
-//!        device: &Device,
-//!    ) -> Result<Vec<u32>>
-//!    ```
-//!
-//! 2. The module structs (`Linear`, `Embedding`, `RMSNorm`,
-//!    `MultiHeadAttention`, `MultiHeadAttentionKVCache`, `GatedMLP`,
-//!    `TransformerBlock`, `Llama3Simplified`) derive `Clone` in addition
-//!    to `Debug`. The KV-cache consistency tests need to snapshot a layer
-//!    with its initial weights before any cache mutation occurs.
+//! All module structs derive `Clone` so KV-cache consistency tests can
+//! snapshot a model with its initial weights before any cache mutation.
 
 use candle_core::{DType, Device, Result, Tensor};
 use hw4::*;
@@ -34,17 +12,6 @@ use test_support::{as_f32_vec, assert_f32_slice_close, json, python_json};
 /// Flatten a tensor and pull it back to the host as a `Vec<f32>`.
 fn to_vec_f32(t: &Tensor) -> Result<Vec<f32>> {
     t.flatten_all()?.to_vec1::<f32>()
-}
-
-/// Build a causal (upper-triangular `-inf`) mask of shape `[length, length]`.
-fn causal_mask(length: usize, device: &Device) -> Result<Tensor> {
-    let mut data = vec![0f32; length * length];
-    for i in 0..length {
-        for j in (i + 1)..length {
-            data[i * length + j] = f32::NEG_INFINITY;
-        }
-    }
-    Tensor::from_vec(data, (length, length), device)
 }
 
 // ---------- PyTorch ground-truth helpers (unchanged) ----------
@@ -376,7 +343,7 @@ fn test_self_attention_2d() -> Result<()> {
     let q = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
     let k = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
     let v = Tensor::randn(0f32, 1f32, (5, 6), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
 
     let out = self_attention(&q, &k, &v, Some(&mask))?;
     assert_eq!(out.dims(), &[5, 6]);
@@ -411,7 +378,7 @@ fn test_self_attention_batched() -> Result<()> {
     let q = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
     let k = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
     let v = Tensor::randn(0f32, 1f32, (2, 3, 5, 4), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
 
     let out = self_attention(&q, &k, &v, Some(&mask))?;
     assert_eq!(out.dims(), &[2, 3, 5, 4]);
@@ -498,7 +465,7 @@ fn test_mha_with_mask() -> Result<()> {
     let device = Device::Cpu;
     let mut attn = MultiHeadAttention::new(12, 3, &device)?;
     let x = Tensor::randn(0f32, 1f32, (2, 5, 12), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
     let out = attn.forward(&x, Some(&mask), 0, false)?;
 
     let wq_pt = attn.wq.weight.t()?.contiguous()?;
@@ -527,7 +494,7 @@ fn test_mha_kvcache_no_cache() -> Result<()> {
     let device = Device::Cpu;
     let mut attn = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
     let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
     let out = attn.forward(&x, Some(&mask), 0, false)?;
     assert_eq!(out.dims(), &[1, 5, 12]);
     Ok(())
@@ -540,7 +507,7 @@ fn test_mha_kvcache_consistency() -> Result<()> {
     let device = Device::Cpu;
     let mut attn = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
     let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
 
     let full = attn.forward(&x, Some(&mask), 0, false)?;
     assert_eq!(full.dims(), &[1, 5, 12]);
@@ -548,19 +515,18 @@ fn test_mha_kvcache_consistency() -> Result<()> {
     // Snapshot the layer (and its zeroed cache) before any cached call mutates it.
     let mut attn2 = attn.clone();
 
-    let prefix_mask = causal_mask(3, &device)?;
+    let prefix_mask = build_causal_mask(3, &device)?;
     let x_prefix = x.narrow(1, 0, 3)?;
-    let _prefix = attn2.forward(&x_prefix, Some(&prefix_mask), 0, true)?;
+    let prefix = attn2.forward(&x_prefix, Some(&prefix_mask), 0, true)?;
 
     // Tail mask: rows 3..5 of the full 5x5 mask, shape [2, 5].
     let tail_mask = mask.narrow(0, 3, 2)?;
     let x_tail = x.narrow(1, 3, 2)?;
     let tail = attn2.forward(&x_tail, Some(&tail_mask), 3, true)?;
 
-    // Compare full[:, :3] against the prefix output.
-    let prefix_again = attn.clone().forward(&x_prefix, Some(&prefix_mask), 0, false)?;
+    // Compare full[:, :3] against the cached prefix output.
     let full_prefix = to_vec_f32(&full.narrow(1, 0, 3)?)?;
-    let prefix_vec = to_vec_f32(&prefix_again)?;
+    let prefix_vec = to_vec_f32(&prefix)?;
     for (a, b) in prefix_vec.iter().zip(full_prefix.iter()) {
         assert!((a - b).abs() < 1e-5, "KV cache prefix mismatch: {a} vs {b}");
     }
@@ -603,7 +569,7 @@ fn test_transformer_block_shape() -> Result<()> {
     let device = Device::Cpu;
     let mut block = TransformerBlock::new(12, 3, 16, 8, &device)?;
     let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
-    let mask = causal_mask(5, &device)?;
+    let mask = build_causal_mask(5, &device)?;
     let out = block.forward(&x, Some(&mask), 0, false)?;
     assert_eq!(out.dims(), &[1, 5, 12]);
     Ok(())
@@ -701,17 +667,14 @@ fn test_generate_basic() -> Result<()> {
             .collect()
     };
 
-    let stop_tokens: Vec<u32> = vec![4];
-    let generated = generate(
-        &mut model_fn,
-        &[1u32, 2],
-        &decode_fn,
-        &stop_tokens,
-        0.7,
-        5,
-        false,
-        &device,
-    )?;
+    let config = GenerateConfig {
+        decode_fn: &decode_fn,
+        stop_tokens: &[4],
+        temperature: 0.7,
+        max_tokens: 5,
+        verbose: false,
+    };
+    let generated = generate(&mut model_fn, &[1u32, 2], &config, &device)?;
 
     assert_eq!(generated, vec![3, 4]);
     Ok(())
@@ -729,17 +692,14 @@ fn test_generate_max_tokens() -> Result<()> {
     };
 
     let decode_fn = |_tokens: &[u32]| -> String { String::new() };
-    let stop_tokens: Vec<u32> = vec![4];
-    let generated = generate(
-        &mut model_fn,
-        &[1u32, 2],
-        &decode_fn,
-        &stop_tokens,
-        0.7,
-        3,
-        false,
-        &device,
-    )?;
+    let config = GenerateConfig {
+        decode_fn: &decode_fn,
+        stop_tokens: &[4],
+        temperature: 0.7,
+        max_tokens: 3,
+        verbose: false,
+    };
+    let generated = generate(&mut model_fn, &[1u32, 2], &config, &device)?;
 
     assert_eq!(generated.len(), 3, "Should stop at max_tokens=3");
     Ok(())
@@ -927,7 +887,7 @@ fn test_transformer_block_output_finite() -> Result<()> {
     let device = Device::Cpu;
     let mut block = TransformerBlock::new(8, 2, 16, 10, &device)?;
     let x = Tensor::randn(0f32, 0.1f32, (1, 4, 8), &device)?;
-    let mask = causal_mask(4, &device)?;
+    let mask = build_causal_mask(4, &device)?;
     let out = block.forward(&x, Some(&mask), 0, false)?;
 
     let vals = to_vec_f32(&out)?;
@@ -964,16 +924,14 @@ fn test_generate_stops_at_stop_token() -> Result<()> {
     };
 
     let decode_fn = |_: &[u32]| -> String { String::new() };
-    let generated = generate(
-        &mut model_fn,
-        &[1u32, 2],
-        &decode_fn,
-        &[stop_token],
-        0.5,
-        100,
-        false,
-        &device,
-    )?;
+    let config = GenerateConfig {
+        decode_fn: &decode_fn,
+        stop_tokens: &[stop_token],
+        temperature: 0.5,
+        max_tokens: 100,
+        verbose: false,
+    };
+    let generated = generate(&mut model_fn, &[1u32, 2], &config, &device)?;
     // Should stop after generating one token (the stop token).
     assert_eq!(generated.len(), 1);
     assert_eq!(generated[0], stop_token);

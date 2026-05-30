@@ -10,7 +10,7 @@
 
 use candle_core::{Result, Tensor};
 use hf_hub::api::sync::Api;
-use hw4::{default_device, eval_llama3, generate};
+use hw4::{default_device, eval_llama3, generate, GenerateConfig};
 use tokenizers::Tokenizer;
 
 // Llama 3 special tokens (same IDs as the simplified model).
@@ -84,18 +84,14 @@ fn main() -> Result<()> {
         model.forward(tokens, seq_pos, use_cache)
     };
 
-    let stop_tokens: Vec<u32> = vec![EOS, EOT];
-
-    let generated = generate(
-        &mut model_fn,
-        &prompt_tokens,
-        &decode_fn,
-        &stop_tokens,
-        0.7,
-        256,
-        true, // verbose: stream decoded tokens to stdout
-        &device,
-    )?;
+    let config = GenerateConfig {
+        decode_fn: &decode_fn,
+        stop_tokens: &[EOS, EOT],
+        temperature: 0.7,
+        max_tokens: 256,
+        verbose: true,
+    };
+    let generated = generate(&mut model_fn, &prompt_tokens, &config, &device)?;
 
     println!("\n\n[generated {} tokens]", generated.len());
     Ok(())
