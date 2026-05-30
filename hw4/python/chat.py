@@ -3,6 +3,7 @@ import os
 import math
 import sys
 import json
+import time
 import torch
 from torch.nn import Module, ModuleList, Parameter, Buffer
 from huggingface_hub import hf_hub_download
@@ -610,5 +611,11 @@ chat = ChatFormat(tokenizer)
 msg = Message(role='user', content=raw_prompt)
 prompt = chat.encode_dialog_prompt([msg])
 
-generate(model, prompt, tokenizer)
+t0 = time.time()
+generated = generate(model, prompt, tokenizer)
+dt = time.time() - t0
+
 print()
+num_generated = len(generated)
+print(f'generated {num_generated} tokens in {dt:.02f}s', end=' ')
+print(f'({num_generated / dt:.01f} tok/s)')

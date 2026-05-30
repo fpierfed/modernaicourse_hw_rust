@@ -91,8 +91,15 @@ fn main() -> Result<()> {
         max_tokens: 256,
         verbose: true,
     };
-    let generated = generate(&mut model_fn, &prompt_tokens, &config, &device)?;
 
-    println!("\n\n[generated {} tokens]", generated.len());
+    let start = std::time::Instant::now();
+    let generated = generate(&mut model_fn, &prompt_tokens, &config, &device)?;
+    let elapsed = start.elapsed();
+
+    let n_tokens = generated.len();
+    let tps = n_tokens as f64 / elapsed.as_secs_f64();
+    println!(
+        "\n\n[generated {n_tokens} tokens in {elapsed:.2?} ({tps:.1} tok/s)]"
+    );
     Ok(())
 }
