@@ -85,9 +85,8 @@ pub fn default_device() -> Result<Device> {
     Ok(Device::Cpu)
 }
 
-const EPSILON: Float = 1.0e-5;
+const EPSILON: f32 = 1.0e-5;
 const LLAMA3_REPO: &str = "zkolter/Llama-3.2-1B-Instruct-Simplified";
-type Float = f32;
 
 //
 // Candle Note
@@ -106,7 +105,7 @@ pub struct Linear {
 
 impl Linear {
     pub fn new(in_dim: usize, out_dim: usize, device: &Device) -> Result<Self> {
-        let std = (2.0 / in_dim as Float).sqrt();
+        let std = (2.0 / in_dim as f32).sqrt();
         Ok(Self {
             weight: Tensor::randn(0f32, std, (in_dim, out_dim), device)?,
         })
@@ -147,12 +146,12 @@ pub fn silu(x: &Tensor) -> Result<Tensor> {
 
 #[derive(Clone, Debug)]
 pub struct RMSNorm {
-    pub eps: Float,
+    pub eps: f32,
     pub weight: Tensor,
 }
 
 impl RMSNorm {
-    pub fn new(dim: usize, eps: Float, device: &Device) -> Result<Self> {
+    pub fn new(dim: usize, eps: f32, device: &Device) -> Result<Self> {
         Ok(Self {
             eps,
             weight: Tensor::ones(dim, DType::F32, device)?,
@@ -192,9 +191,7 @@ fn split_heads(x: &Tensor, batch: usize, seq: usize, n_heads: usize) -> Result<T
 /// Reverse of `split_heads`: `[batch, n_heads, seq, head_dim]` back to
 /// `[batch, seq, dim]`.
 fn merge_heads(x: &Tensor, batch: usize, seq: usize, dim: usize) -> Result<Tensor> {
-    x.transpose(1, 2)?
-        .contiguous()?
-        .reshape((batch, seq, dim))
+    x.transpose(1, 2)?.contiguous()?.reshape((batch, seq, dim))
 }
 
 #[derive(Clone, Debug)]
@@ -236,8 +233,7 @@ impl MultiHeadAttention {
 
         let y = self_attention(&q, &k, &v, mask)?;
 
-        self.wp
-            .forward(&merge_heads(&y, batch_size, seq_len, dim)?)
+        self.wp.forward(&merge_heads(&y, batch_size, seq_len, dim)?)
     }
 }
 
@@ -303,8 +299,7 @@ impl MultiHeadAttentionKVCache {
 
         let y = self_attention(&q, &working_k, &working_v, mask)?;
 
-        self.wp
-            .forward(&merge_heads(&y, batch_size, seq_len, dim)?)
+        self.wp.forward(&merge_heads(&y, batch_size, seq_len, dim)?)
     }
 }
 
