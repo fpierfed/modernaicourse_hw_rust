@@ -1,8 +1,22 @@
-use burn::tensor::{Distribution, Int, Tensor, TensorData};
+//! Tests for hw5 — Candle version.
+
+use candle_core::{Device, DType, Result, Tensor};
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
 use test_support::{as_f32_vec, assert_f32_close, assert_f32_slice_close, json, python_json};
+
+// ---------- small helpers ----------
+
+fn to_vec_f32(t: &Tensor) -> Result<Vec<f32>> {
+    t.flatten_all()?.to_vec1::<f32>()
+}
+
+fn to_vec_i32(t: &Tensor) -> Result<Vec<i32>> {
+    t.flatten_all()?.to_vec1::<i32>()
+}
+
+// ---------- PyTorch ground-truth helpers ----------
 
 fn torch_linear(
     x: Vec<f32>,
@@ -125,14 +139,14 @@ json.dump([float(loss)], sys.stdout)
     ))[0]
 }
 
-fn causal_mask(length: usize) -> Tensor<B, 2> {
+fn causal_mask(length: usize, device: &Device) -> Result<Tensor> {
     let mut data = vec![0.0f32; length * length];
     for i in 0..length {
         for j in (i + 1)..length {
             data[i * length + j] = f32::NEG_INFINITY;
         }
     }
-    Tensor::<B, 2>::from_data(TensorData::new(data, [length, length]), &DEVICE)
+    Tensor::from_vec(data, (length, length), device)
 }
 
 // ============================================================
@@ -290,252 +304,248 @@ fn test_bpe_decode() {
 // Part II: Transformer Architecture
 // ============================================================
 
-#[test]
-fn test_linear() {
-    let layer = Linear::new(10, 20, &DEVICE);
+// ---------- Linear ----------
 
-    let x: Tensor<B, 2> = Tensor::random([50, 10], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = layer.forward(x.clone());
-    assert_eq!(out.dims(), [50, 20]);
+#[test]
+fn test_linear() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(10, 20, &device)?;
+
+    let x = Tensor::randn(0f32, 1f32, (50, 10), &device)?;
+    let out = layer.forward(&x)?;
+    assert_eq!(out.dims(), &[50, 20]);
 
     let expected = torch_linear(
-        x.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&x)?,
         x.dims().to_vec(),
-        layer.weight().clone().into_data().to_vec::<f32>().unwrap(),
-        layer.weight().dims().to_vec(),
+        to_vec_f32(&layer.weight)?,
+        layer.weight.dims().to_vec(),
     );
-    let actual = out.into_data().to_vec::<f32>().unwrap();
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-4);
 
-    // Batch dims
-    let x: Tensor<B, 3> = Tensor::random([7, 9, 10], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = layer.forward(x);
-    assert_eq!(out.dims(), [7, 9, 20]);
+    // Batch dims.
+    let x = Tensor::randn(0f32, 1f32, (7, 9, 10), &device)?;
+    let out = layer.forward(&x)?;
+    assert_eq!(out.dims(), &[7, 9, 20]);
+    Ok(())
 }
 
 #[test]
-fn test_linear_kaiming_init() {
-    let layer = Linear::new(100, 1000, &DEVICE);
-    let w = layer.weight().clone();
-    let mean: f32 = w.clone().mean().into_scalar();
-    let var: f32 = (w - mean).powf_scalar(2.0).mean().into_scalar();
-    let std = (var as f64).sqrt();
-    let expected_std = (2.0 / 100.0f64).sqrt();
+fn test_linear_kaiming_init() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(100, 1000, &device)?;
+    let w_data = to_vec_f32(&layer.weight)?;
+    let n = w_data.len() as f32;
+    let mean = w_data.iter().sum::<f32>() / n;
+    let var = w_data.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n;
+    let std = var.sqrt();
+    let expected_std = (2.0f32 / 100.0).sqrt();
     assert!(
         (std - expected_std).abs() < 3e-3,
         "Linear weight std {std} not close to expected {expected_std}"
     );
+    Ok(())
+}
+
+// ---------- Embedding ----------
+
+#[test]
+fn test_embedding() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Embedding::new(200, 20, &device)?;
+
+    let y = Tensor::from_vec(vec![0u32, 5, 10, 199], (1, 4), &device)?;
+    let out = layer.forward(&y)?;
+    assert_eq!(out.dims(), &[1, 4, 20]);
+
+    // Correctness: first token's embedding == corresponding weight row.
+    let out0 = to_vec_f32(&out.narrow(1, 0, 1)?.reshape(20)?)?;
+    let w0 = to_vec_f32(&layer.weight.narrow(0, 0, 1)?.reshape(20)?)?;
+    assert_f32_slice_close(&out0, &w0, 1e-6);
+
+    // Batch dims.
+    let y = Tensor::from_vec(vec![0u32, 1, 2, 3, 4, 5], (2, 3), &device)?;
+    let out = layer.forward(&y)?;
+    assert_eq!(out.dims(), &[2, 3, 20]);
+    Ok(())
 }
 
 #[test]
-fn test_embedding() {
-    let layer = Embedding::new(200, 20, &DEVICE);
-
-    // Use 2D input [1, 4] to test single-sequence embedding
-    let y: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![0i32, 5, 10, 199], [1, 4]), &DEVICE);
-    let out = layer.forward(y);
-    assert_eq!(out.dims(), [1, 4, 20]);
-
-    // Correctness: first token's embedding == corresponding weight row
-    let w = layer.weight().clone();
-    let out0: Vec<f32> = out
-        .clone()
-        .narrow(1, 0, 1)
-        .flatten::<1>(0, 2)
-        .narrow(0, 0, 20)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let w0: Vec<f32> = w
-        .clone()
-        .narrow(0, 0, 1)
-        .squeeze::<1>()
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    assert_eq!(out0, w0);
-
-    // Batch dims
-    let y: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![0i32, 1, 2, 3, 4, 5], [2, 3]), &DEVICE);
-    let out = layer.forward(y);
-    assert_eq!(out.dims(), [2, 3, 20]);
-}
-
-#[test]
-fn test_embedding_std_init() {
-    let layer = Embedding::new(1000, 100, &DEVICE);
-    let w = layer.weight().clone();
-    let mean: f32 = w.clone().mean().into_scalar();
-    let var: f32 = (w - mean).powf_scalar(2.0).mean().into_scalar();
-    let std = (var as f64).sqrt();
+fn test_embedding_std_init() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Embedding::new(1000, 100, &device)?;
+    let w_data = to_vec_f32(&layer.weight)?;
+    let n = w_data.len() as f32;
+    let mean = w_data.iter().sum::<f32>() / n;
+    let var = w_data.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n;
+    let std = var.sqrt();
     assert!(
         (std - 1.0).abs() < 3e-2,
         "Embedding weight std {std} not close to 1.0"
     );
+    Ok(())
 }
 
+// ---------- SiLU ----------
+
 #[test]
-fn test_silu() {
-    let x: Tensor<B, 2> = Tensor::random([10, 20], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = silu(x.clone());
-    let expected = torch_silu(
-        x.clone().into_data().to_vec::<f32>().unwrap(),
-        x.dims().to_vec(),
-    );
-    let actual = out.into_data().to_vec::<f32>().unwrap();
+fn test_silu() -> Result<()> {
+    let device = Device::Cpu;
+    let x = Tensor::randn(0f32, 1f32, (10, 20), &device)?;
+    let out = silu(&x)?;
+    let expected = torch_silu(to_vec_f32(&x)?, x.dims().to_vec());
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-6);
 
-    // Multi-dim
-    let x: Tensor<B, 4> = Tensor::random([3, 4, 5, 6], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = silu(x.clone());
+    // Multi-dim.
+    let x = Tensor::randn(0f32, 1f32, (3, 4, 5, 6), &device)?;
+    let out = silu(&x)?;
     assert_eq!(out.dims(), x.dims());
+    Ok(())
 }
 
-#[test]
-fn test_rms_norm() {
-    let x: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![1.0f32, -1.0, 0.5, 0.5, 2.0, 0.0, -2.0, 1.0], [2, 4]),
-        &DEVICE,
-    );
-    let out = rms_norm(x.clone(), 1e-5);
+// ---------- RMSNorm ----------
 
-    let expected = torch_rms_norm(
-        x.clone().into_data().to_vec::<f32>().unwrap(),
-        x.dims().to_vec(),
-        1e-5,
-    );
-    let actual = out.into_data().to_vec::<f32>().unwrap();
+#[test]
+fn test_rms_norm() -> Result<()> {
+    let device = Device::Cpu;
+    let x = Tensor::from_vec(
+        vec![1.0f32, -1.0, 0.5, 0.5, 2.0, 0.0, -2.0, 1.0],
+        (2, 4),
+        &device,
+    )?;
+    let out = rms_norm(&x, 1e-5)?;
+
+    let expected = torch_rms_norm(to_vec_f32(&x)?, x.dims().to_vec(), 1e-5);
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-5);
 
-    // Batch dims
-    let x: Tensor<B, 3> = Tensor::random([10, 7, 20], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = rms_norm(x, 1e-3);
-    assert_eq!(out.dims(), [10, 7, 20]);
+    // Batch dims.
+    let x = Tensor::randn(0f32, 1f32, (10, 7, 20), &device)?;
+    let out = rms_norm(&x, 1e-3)?;
+    assert_eq!(out.dims(), &[10, 7, 20]);
+    Ok(())
 }
 
+// ---------- self_attention ----------
+
 #[test]
-fn test_self_attention_causal() {
-    let q: Tensor<B, 2> = Tensor::random([5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let k: Tensor<B, 2> = Tensor::random([5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let v: Tensor<B, 2> = Tensor::random([5, 6], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let mask = causal_mask(5);
-    let out = self_attention(q.clone(), k.clone(), v.clone(), Some(mask));
-    assert_eq!(out.dims(), [5, 6]);
+fn test_self_attention_causal() -> Result<()> {
+    let device = Device::Cpu;
+    let q = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
+    let k = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
+    let v = Tensor::randn(0f32, 1f32, (5, 6), &device)?;
+    let mask = causal_mask(5, &device)?;
+    let out = self_attention(&q, &k, &v, Some(&mask))?;
+    assert_eq!(out.dims(), &[5, 6]);
     let expected = torch_attention(
-        q.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&q)?,
         q.dims().to_vec(),
-        k.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&k)?,
         k.dims().to_vec(),
-        v.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&v)?,
         v.dims().to_vec(),
         Some(q.dims()[0]),
     );
-    let actual = out.clone().into_data().to_vec::<f32>().unwrap();
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-5);
 
-    // First row with causal mask: only attends to position 0, so output = V[0]
-    let out_row0: Vec<f32> = out
-        .narrow(0, 0, 1)
-        .squeeze::<1>()
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let v_row0: Vec<f32> = v
-        .narrow(0, 0, 1)
-        .squeeze::<1>()
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
+    // First row with causal mask: only attends to position 0, so output = V[0].
+    let out_row0 = to_vec_f32(&out.narrow(0, 0, 1)?.reshape(6)?)?;
+    let v_row0 = to_vec_f32(&v.narrow(0, 0, 1)?.reshape(6)?)?;
     for (a, b) in out_row0.iter().zip(v_row0.iter()) {
         assert!((a - b).abs() < 1e-5);
     }
+    Ok(())
 }
 
 #[test]
-fn test_self_attention_batched() {
-    let q: Tensor<B, 4> = Tensor::random([2, 3, 5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let k: Tensor<B, 4> = Tensor::random([2, 3, 5, 8], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let v: Tensor<B, 4> = Tensor::random([2, 3, 5, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let mask = causal_mask(5);
-    let out = self_attention(q.clone(), k.clone(), v.clone(), Some(mask));
-    assert_eq!(out.dims(), [2, 3, 5, 4]);
+fn test_self_attention_batched() -> Result<()> {
+    let device = Device::Cpu;
+    let q = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
+    let k = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
+    let v = Tensor::randn(0f32, 1f32, (2, 3, 5, 4), &device)?;
+    let mask = causal_mask(5, &device)?;
+    let out = self_attention(&q, &k, &v, Some(&mask))?;
+    assert_eq!(out.dims(), &[2, 3, 5, 4]);
     let expected = torch_attention(
-        q.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&q)?,
         q.dims().to_vec(),
-        k.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&k)?,
         k.dims().to_vec(),
-        v.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&v)?,
         v.dims().to_vec(),
         Some(q.dims()[2]),
     );
-    let actual = out.into_data().to_vec::<f32>().unwrap();
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-5);
+    Ok(())
 }
 
+// ---------- MultiHeadAttentionKVCache ----------
+
 #[test]
-fn test_multi_head_attention_kv_cache() {
-    let mut attn = MultiHeadAttentionKVCache::new(12, 3, 8, &DEVICE);
-    let x: Tensor<B, 3> = Tensor::random([1, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let mask = causal_mask(5);
+fn test_multi_head_attention_kv_cache() -> Result<()> {
+    let device = Device::Cpu;
+    let mut attn = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
+    let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
+    let mask = causal_mask(5, &device)?;
 
-    let full = attn.forward(x.clone(), Some(mask.clone()), 0, false);
-    assert_eq!(full.dims(), [1, 5, 12]);
+    let full = attn.forward(&x, Some(&mask), 0, false)?;
+    assert_eq!(full.dims(), &[1, 5, 12]);
 
-    // Prefix + tail with cache
-    let mut attn2 = MultiHeadAttentionKVCache::new(12, 3, 8, &DEVICE);
-    let prefix_mask = causal_mask(3);
-    let _prefix = attn2.forward(x.clone().narrow(1, 0, 3), Some(prefix_mask), 0, true);
-    let tail_mask: Tensor<B, 2> = mask.narrow(0, 3, 2);
-    let tail = attn2.forward(x.narrow(1, 3, 2), Some(tail_mask), 3, true);
+    // Prefix + tail with cache.
+    let mut attn2 = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
+    let prefix_mask = causal_mask(3, &device)?;
+    let _prefix = attn2.forward(&x.narrow(1, 0, 3)?, Some(&prefix_mask), 0, true)?;
+    let tail_mask = mask.narrow(0, 3, 2)?;
+    let tail = attn2.forward(&x.narrow(1, 3, 2)?, Some(&tail_mask), 3, true)?;
 
-    let full_tail: Vec<f32> = full
-        .narrow(1, 3, 2)
-        .flatten::<1>(0, 2)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let tail_vec: Vec<f32> = tail.flatten::<1>(0, 2).into_data().to_vec::<f32>().unwrap();
+    let full_tail = to_vec_f32(&full.narrow(1, 3, 2)?)?;
+    let tail_vec = to_vec_f32(&tail)?;
     let max_diff: f32 = full_tail
         .iter()
         .zip(tail_vec.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
     assert!(max_diff < 1e-5, "KV cache mismatch: max diff = {max_diff}");
+    Ok(())
 }
 
+// ---------- MLP ----------
+
 #[test]
-fn test_mlp() {
-    let mlp = MLP::new(5, 7, &DEVICE);
-    let x: Tensor<B, 3> = Tensor::random([4, 3, 5], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let out = mlp.forward(x);
-    assert_eq!(out.dims(), [4, 3, 5]);
+fn test_mlp() -> Result<()> {
+    let device = Device::Cpu;
+    let mlp = MLP::new(5, 7, &device)?;
+    let x = Tensor::randn(0f32, 1f32, (4, 3, 5), &device)?;
+    let out = mlp.forward(&x)?;
+    assert_eq!(out.dims(), &[4, 3, 5]);
+    Ok(())
 }
 
+// ---------- TransformerBlock ----------
+
 #[test]
-fn test_transformer_block() {
-    let mut block = TransformerBlock::new(12, 3, 16, 8, &DEVICE);
-    let x: Tensor<B, 3> = Tensor::random([1, 5, 12], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let mask = causal_mask(5);
+fn test_transformer_block() -> Result<()> {
+    let device = Device::Cpu;
+    let mut block = TransformerBlock::new(12, 3, 16, 8, &device)?;
+    let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
+    let mask = causal_mask(5, &device)?;
 
-    let full = block.forward(x.clone(), Some(mask.clone()), 0, false);
-    assert_eq!(full.dims(), [1, 5, 12]);
+    let full = block.forward(&x, Some(&mask), 0, false)?;
+    assert_eq!(full.dims(), &[1, 5, 12]);
 
-    // KV cache consistency
-    let mut block2 = TransformerBlock::new(12, 3, 16, 8, &DEVICE);
-    let prefix_mask = causal_mask(3);
-    let _prefix = block2.forward(x.clone().narrow(1, 0, 3), Some(prefix_mask), 0, true);
-    let tail_mask: Tensor<B, 2> = mask.narrow(0, 3, 2);
-    let tail = block2.forward(x.narrow(1, 3, 2), Some(tail_mask), 3, true);
+    // KV cache consistency.
+    let mut block2 = TransformerBlock::new(12, 3, 16, 8, &device)?;
+    let prefix_mask = causal_mask(3, &device)?;
+    let _prefix = block2.forward(&x.narrow(1, 0, 3)?, Some(&prefix_mask), 0, true)?;
+    let tail_mask = mask.narrow(0, 3, 2)?;
+    let tail = block2.forward(&x.narrow(1, 3, 2)?, Some(&tail_mask), 3, true)?;
 
-    let full_tail: Vec<f32> = full
-        .narrow(1, 3, 2)
-        .flatten::<1>(0, 2)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let tail_vec: Vec<f32> = tail.flatten::<1>(0, 2).into_data().to_vec::<f32>().unwrap();
+    let full_tail = to_vec_f32(&full.narrow(1, 3, 2)?)?;
+    let tail_vec = to_vec_f32(&tail)?;
     let max_diff: f32 = full_tail
         .iter()
         .zip(tail_vec.iter())
@@ -545,74 +555,78 @@ fn test_transformer_block() {
         max_diff < 3e-5,
         "TransformerBlock KV cache mismatch: {max_diff}"
     );
+    Ok(())
 }
 
+// ---------- LLM ----------
+
 #[test]
-fn test_llm() {
-    let mut model = LLM::new(11, 12, 3, 8, 16, 2, &DEVICE);
-    let tokens: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![0i32, 1, 2, 3, 4], [1, 5]), &DEVICE);
+fn test_llm() -> Result<()> {
+    let device = Device::Cpu;
+    let mut model = LLM::new(11, 12, 3, 8, 16, 2, &device)?;
+    let tokens = Tensor::from_vec(vec![0u32, 1, 2, 3, 4], (1, 5), &device)?;
 
-    let out = model.forward(tokens.clone(), 0, false);
-    assert_eq!(out.dims(), [1, 5, 11]);
+    let out = model.forward(&tokens, 0, false)?;
+    assert_eq!(out.dims(), &[1, 5, 11]);
 
-    // KV cache consistency
-    let mut model2 = LLM::new(11, 12, 3, 8, 16, 2, &DEVICE);
-    let _prefix = model2.forward(tokens.clone().narrow(1, 0, 3), 0, true);
-    let tail = model2.forward(tokens.narrow(1, 3, 2), 3, true);
+    // KV cache consistency.
+    let mut model2 = LLM::new(11, 12, 3, 8, 16, 2, &device)?;
+    let _prefix = model2.forward(&tokens.narrow(1, 0, 3)?, 0, true)?;
+    let tail = model2.forward(&tokens.narrow(1, 3, 2)?, 3, true)?;
 
-    let out_tail: Vec<f32> = out
-        .narrow(1, 3, 2)
-        .flatten::<1>(0, 2)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let tail_vec: Vec<f32> = tail.flatten::<1>(0, 2).into_data().to_vec::<f32>().unwrap();
+    let out_tail = to_vec_f32(&out.narrow(1, 3, 2)?)?;
+    let tail_vec = to_vec_f32(&tail)?;
     let max_diff: f32 = out_tail
         .iter()
         .zip(tail_vec.iter())
         .map(|(a, b)| (a - b).abs())
         .fold(0.0f32, f32::max);
     assert!(max_diff < 6e-5, "LLM KV cache mismatch: {max_diff}");
+    Ok(())
 }
 
 // ============================================================
 // Part III: Training
 // ============================================================
 
+// ---------- cross_entropy_loss ----------
+
 #[test]
-fn test_cross_entropy_loss_2d() {
+fn test_cross_entropy_loss_2d() -> Result<()> {
+    let device = Device::Cpu;
     let logits_data = vec![2.0f32, 1.0, 0.0, 0.0, 2.0, 1.0];
     let targets = vec![0i32, 2];
     let shape = [2, 3];
-    let logits: Tensor<B, 2> =
-        Tensor::from_data(TensorData::new(logits_data.clone(), shape), &DEVICE);
-    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from(targets.as_slice()), &DEVICE);
-    let loss = cross_entropy_loss(logits, y);
-    let val: f32 = loss.into_scalar();
+    let logits = Tensor::from_vec(logits_data.clone(), (2, 3), &device)?;
+    let y = Tensor::from_vec(targets.clone(), 2, &device)?;
+    let loss = cross_entropy_loss(&logits, &y)?;
+    let val: f32 = loss.to_scalar::<f32>()?;
     let expected = torch_cross_entropy(logits_data, shape.to_vec(), targets);
     assert_f32_close(val, expected, 1e-5);
+    Ok(())
 }
 
 #[test]
-fn test_cross_entropy_loss_3d() {
-    // Multi-dimensional logits: (batch, seq, classes) -> reshape to 2D for cross_entropy_loss
-    let logits: Tensor<B, 3> = Tensor::random([4, 5, 7], Distribution::Normal(0.0, 1.0), &DEVICE);
+fn test_cross_entropy_loss_3d() -> Result<()> {
+    let device = Device::Cpu;
+    let logits = Tensor::randn(0f32, 1f32, (4, 5, 7), &device)?;
     let y_data: Vec<i32> = (0..20).map(|i| i % 7).collect();
-    let y: Tensor<B, 2, Int> = Tensor::from_data(TensorData::new(y_data, [4, 5]), &DEVICE);
-    // Reshape logits to (20, 7) and targets to (20) for cross_entropy_loss
-    let logits_flat: Tensor<B, 2> = logits.clone().reshape([20, 7]);
-    let y_flat: Tensor<B, 1, Int> = y.reshape([20]);
-    let loss = cross_entropy_loss(logits_flat, y_flat);
-    let val: f32 = loss.into_scalar();
+    let y = Tensor::from_vec(y_data.clone(), (4, 5), &device)?;
+    let logits_flat = logits.reshape((20, 7))?;
+    let y_flat = y.reshape(20)?;
+    let loss = cross_entropy_loss(&logits_flat, &y_flat)?;
+    let val: f32 = loss.to_scalar::<f32>()?;
     let expected = torch_cross_entropy(
-        logits.clone().into_data().to_vec::<f32>().unwrap(),
+        to_vec_f32(&logits)?,
         logits.dims().to_vec(),
-        (0..20).map(|i| i % 7).collect(),
+        y_data,
     );
     assert!(val.is_finite() && val > 0.0);
     assert_f32_close(val, expected, 1e-5);
+    Ok(())
 }
+
+// ---------- pretokenize_data / DataLoader ----------
 
 #[test]
 fn test_pretokenize_data() {
@@ -631,16 +645,14 @@ fn test_pretokenize_data() {
         .chunks_exact(2)
         .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
         .collect();
-    // Should have tokenized "abc" and "def" (2 chunks of 3)
     assert_eq!(tokens, vec![97, 98, 99, 100, 101, 102]);
 }
 
 #[test]
-fn test_dataloader_file() {
+fn test_dataloader_file() -> Result<()> {
     let tmp = tempfile::tempdir().unwrap();
     let path = tmp.path().join("tokens.bin");
 
-    // Write tokens 0..20 as u16
     let mut f = std::fs::File::create(&path).unwrap();
     for i in 0u16..20 {
         f.write_all(&i.to_le_bytes()).unwrap();
@@ -652,140 +664,140 @@ fn test_dataloader_file() {
 
     assert_eq!(batches.len(), 3);
 
-    // First batch: input [[0,1,2],[4,5,6]], target [[1,2,3],[5,6,7]]
-    let xb0: Vec<i32> = batches[0].0.clone().into_data().to_vec::<i32>().unwrap();
+    let xb0 = to_vec_i32(&batches[0].0)?;
     assert_eq!(xb0, vec![0, 1, 2, 4, 5, 6]);
 
-    let yb0: Vec<i32> = batches[0].1.clone().into_data().to_vec::<i32>().unwrap();
+    let yb0 = to_vec_i32(&batches[0].1)?;
     assert_eq!(yb0, vec![1, 2, 3, 5, 6, 7]);
+    Ok(())
 }
 
-#[test]
-fn test_adam() {
-    let layer = Linear::new(6, 3, &DEVICE);
+// ---------- Adam ----------
 
-    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+#[test]
+fn test_adam() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(6, 3, &device)?;
+
+    let params: Vec<Tensor> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 1e-3, (0.9, 0.95), 1e-8);
 
-    let w_before: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
+    let w_before = to_vec_f32(&params[0])?;
 
-    // 5 training steps
     for _ in 0..5 {
-        let x: Tensor<B, 2> = Tensor::random([16, 6], Distribution::Normal(0.0, 1.0), &DEVICE);
+        let x = Tensor::randn(0f32, 1f32, (16, 6), &device)?;
         let y_data: Vec<i32> = (0..16).map(|i| i % 3).collect();
-        let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::new(y_data, [16]), &DEVICE);
+        let y = Tensor::from_vec(y_data, 16, &device)?;
 
-        let logits = layer.forward(x);
-        let loss = cross_entropy_loss(logits, y);
+        let logits = layer.forward(&x)?;
+        let loss = cross_entropy_loss(&logits, &y)?;
         let grads = loss.backward();
         opt.step(&grads);
     }
 
-    let w_after: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
+    let w_after = to_vec_f32(&params[0])?;
     let changed = w_after
         .iter()
         .zip(w_before.iter())
         .any(|(a, b)| (a - b).abs() > 1e-7);
     assert!(changed, "Adam did not update weights after 5 steps");
+    Ok(())
 }
 
 #[test]
-fn test_adam_zero_grad() {
-    let layer = Linear::new(4, 3, &DEVICE);
+fn test_adam_zero_grad() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(4, 3, &device)?;
 
-    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+    let params: Vec<Tensor> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 1e-2, (0.9, 0.999), 1e-8);
 
-    // Create gradients
-    let x: Tensor<B, 2> = Tensor::random([4, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([0i32, 1, 2, 0]), &DEVICE);
-    let logits = layer.forward(x);
-    let loss = cross_entropy_loss(logits, y);
+    // Create gradients.
+    let x = Tensor::randn(0f32, 1f32, (4, 4), &device)?;
+    let y = Tensor::from_vec(vec![0i32, 1, 2, 0], 4, &device)?;
+    let logits = layer.forward(&x)?;
+    let loss = cross_entropy_loss(&logits, &y)?;
     let _grads = loss.backward();
 
-    // zero_grad then step should be a no-op on weights (first step with zero grad)
+    // zero_grad then step should be a no-op on weights (first step with zero grad).
     opt.zero_grad();
-    let w_before: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
-    // Create dummy zero grads after zero_grad
-    let zero_loss: Tensor<B, 1> =
-        Tensor::from_data(TensorData::from([0.0f32]), &DEVICE).require_grad();
+    let w_before = to_vec_f32(&params[0])?;
+    let zero_loss = Tensor::from_vec(vec![0.0f32], 1, &device)?;
     let zero_grads = zero_loss.backward();
     opt.step(&zero_grads);
-    let w_after: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
+    let w_after = to_vec_f32(&params[0])?;
     for (a, b) in w_after.iter().zip(w_before.iter()) {
         assert!((a - b).abs() < 1e-7, "Adam zero_grad didn't prevent update");
     }
+    Ok(())
 }
 
-#[test]
-fn test_train_llm() {
-    let layer = Linear::new(4, 5, &DEVICE);
+// ---------- train_llm ----------
 
-    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+#[test]
+fn test_train_llm() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(4, 5, &device)?;
+
+    let params: Vec<Tensor> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 0.01, (0.9, 0.999), 1e-8);
 
-    let w_before: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
+    let w_before = to_vec_f32(&params[0])?;
 
-    // Create loader data
-    let x1: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![0i32, 1, 2, 1, 2, 3], [2, 3]), &DEVICE);
-    let y1: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![1i32, 2, 3, 2, 3, 4], [2, 3]), &DEVICE);
-    let x2: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![2i32, 3, 4, 0, 2, 4], [2, 3]), &DEVICE);
-    let y2: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(vec![3i32, 4, 0, 2, 4, 1], [2, 3]), &DEVICE);
+    let x1 = Tensor::from_vec(vec![0i32, 1, 2, 1, 2, 3], (2, 3), &device)?;
+    let y1 = Tensor::from_vec(vec![1i32, 2, 3, 2, 3, 4], (2, 3), &device)?;
+    let x2 = Tensor::from_vec(vec![2i32, 3, 4, 0, 2, 4], (2, 3), &device)?;
+    let y2 = Tensor::from_vec(vec![3i32, 4, 0, 2, 4, 1], (2, 3), &device)?;
     let loader = vec![(x1, y1), (x2, y2)];
 
-    let model_fn = |tokens: Tensor<B, 2, Int>| -> Tensor<B, 3> {
-        // Simple embedding-like model: just lookup and project
-        let embed: Tensor<B, 2> = Tensor::random([5, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
-        // Gather embeddings for each token - flatten, gather, reshape
-        let flat_tokens: Vec<i32> = tokens.clone().into_data().to_vec::<i32>().unwrap();
-        let batch_size = tokens.dims()[0];
-        let seq_len = tokens.dims()[1];
+    let model_fn = |tokens: &Tensor| -> Result<Tensor> {
+        let dims = tokens.dims();
+        let batch_size = dims[0];
+        let seq_len = dims[1];
+
+        let embed = Tensor::randn(0f32, 1f32, (5, 4), &device)?;
+        let flat_tokens = to_vec_i32(tokens)?;
+        let embed_data = to_vec_f32(&embed)?;
+
         let mut embedded_data = Vec::new();
-        let embed_data: Vec<f32> = embed.into_data().to_vec::<f32>().unwrap();
         for &tok in &flat_tokens {
             let start = (tok as usize) * 4;
             embedded_data.extend_from_slice(&embed_data[start..start + 4]);
         }
-        let x: Tensor<B, 3> = Tensor::from_data(
-            TensorData::new(embedded_data, [batch_size, seq_len, 4]),
-            &DEVICE,
-        );
-        // Project through linear: shape [batch, seq, 4] -> [batch, seq, 5]
-        // We reshape to 2D, apply linear, reshape back
-        let x_2d: Tensor<B, 2> = x.reshape([batch_size * seq_len, 4]);
-        let out_2d = layer.forward(x_2d);
-        out_2d.reshape([batch_size, seq_len, 5])
+        let x = Tensor::from_vec(embedded_data, (batch_size, seq_len, 4), &device)?;
+        let x_2d = x.reshape((batch_size * seq_len, 4))?;
+        let out_2d = layer.forward(&x_2d)?;
+        out_2d.reshape((batch_size, seq_len, 5))
     };
 
     train_llm(&model_fn, &loader, &mut opt);
 
-    let w_after: Vec<f32> = params[0].clone().into_data().to_vec::<f32>().unwrap();
+    let w_after = to_vec_f32(&params[0])?;
     let changed = w_after
         .iter()
         .zip(w_before.iter())
         .any(|(a, b)| (a - b).abs() > 1e-7);
     assert!(changed, "train_llm did not update weights");
+    Ok(())
 }
 
+// ---------- generate ----------
+
 #[test]
-fn test_generate() {
+fn test_generate() -> Result<()> {
+    let device = Device::Cpu;
     let mut call_count = 0usize;
     let next_tokens: Vec<u32> = vec![3, 4];
 
-    let mut model_fn =
-        |tokens: Tensor<B, 2, Int>, _seq_pos: usize, _use_cache: bool| -> Tensor<B, 3> {
-            let vocab_size = 6;
-            let seq_len = tokens.dims()[1];
-            let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
-            let next = next_tokens[call_count] as usize;
-            data[(seq_len - 1) * vocab_size + next] = 0.0;
-            call_count += 1;
-            Tensor::from_data(TensorData::new(data, [1, seq_len, vocab_size]), &DEVICE)
-        };
+    let mut model_fn = |tokens: &Tensor, _seq_pos: usize, _use_cache: bool| -> Result<Tensor> {
+        let vocab_size = 6;
+        let seq_len = tokens.dims()[1];
+        let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
+        let next = next_tokens[call_count] as usize;
+        data[(seq_len - 1) * vocab_size + next] = 0.0;
+        call_count += 1;
+        Tensor::from_vec(data, (1, seq_len, vocab_size), &device)
+    };
 
     let decode_fn = |tokens: &[u32]| -> String {
         tokens
@@ -799,25 +811,26 @@ fn test_generate() {
             .collect()
     };
 
-    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, 4, 0.7, 5, false);
+    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, 4, 0.7, 5, false)?;
     assert_eq!(generated, vec![3, 4]);
+    Ok(())
 }
 
 #[test]
-fn test_generate_max_tokens() {
-    let mut model_fn =
-        |tokens: Tensor<B, 2, Int>, _seq_pos: usize, _use_cache: bool| -> Tensor<B, 3> {
-            let vocab_size = 6;
-            let seq_len = tokens.dims()[1];
-            let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
-            // Always predict token 3 (never stop)
-            data[(seq_len - 1) * vocab_size + 3] = 0.0;
-            Tensor::from_data(TensorData::new(data, [1, seq_len, vocab_size]), &DEVICE)
-        };
+fn test_generate_max_tokens() -> Result<()> {
+    let device = Device::Cpu;
+    let mut model_fn = |tokens: &Tensor, _seq_pos: usize, _use_cache: bool| -> Result<Tensor> {
+        let vocab_size = 6;
+        let seq_len = tokens.dims()[1];
+        let mut data = vec![f32::NEG_INFINITY; seq_len * vocab_size];
+        data[(seq_len - 1) * vocab_size + 3] = 0.0;
+        Tensor::from_vec(data, (1, seq_len, vocab_size), &device)
+    };
 
     let decode_fn = |_: &[u32]| -> String { String::new() };
-    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, 4, 0.7, 3, false);
+    let generated = generate(&mut model_fn, &[1, 2], &decode_fn, 4, 0.7, 3, false)?;
     assert_eq!(generated.len(), 3);
+    Ok(())
 }
 
 // ============================================================
@@ -853,38 +866,30 @@ mod tiny_stories_eval {
 }
 
 #[test]
-fn test_eval_llm() {
-    use burn::tensor::{Int, Tensor, TensorData};
-
-    let mut model = eval_llm();
+fn test_eval_llm() -> Result<()> {
+    let device = Device::Cpu;
+    let mut model = eval_llm()?;
 
     let eval_tokens = tiny_stories_eval::get_eval_tokens(0, 48);
-    let tokens_i32: Vec<i32> = eval_tokens.iter().map(|&t| t as i32).collect();
-    let tokens: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(tokens_i32.clone(), [1, 48]), &DEVICE);
+    let tokens = Tensor::from_vec(eval_tokens.clone(), (1, 48), &device)?;
 
-    // Compute sequence loss: cross-entropy of model predicting next tokens
-    let logits = model.forward(tokens.clone().narrow(1, 0, 47), 0, false);
+    // Compute sequence loss.
+    let logits = model.forward(&tokens.narrow(1, 0, 47)?, 0, false)?;
     let vocab_size = logits.dims()[2];
-    let logits_flat: Tensor<B, 2> = logits.reshape([47, vocab_size]);
-    let targets_i32: Vec<i32> = eval_tokens[1..].iter().map(|&t| t as i32).collect();
-    let targets_t: Tensor<B, 1, Int> =
-        Tensor::from_data(TensorData::new(targets_i32, [47]), &DEVICE);
-    let phrase_loss: f32 = cross_entropy_loss(logits_flat, targets_t).into_scalar();
+    let logits_flat = logits.reshape((47, vocab_size))?;
+    let targets = Tensor::from_vec(eval_tokens[1..].to_vec(), 47, &device)?;
+    let phrase_loss: f32 = cross_entropy_loss(&logits_flat, &targets)?.to_scalar::<f32>()?;
 
-    // Corrupted: reverse the token order (except first)
+    // Corrupted: reverse the token order (except first).
     let mut corrupted_tokens = eval_tokens.clone();
     corrupted_tokens[1..].reverse();
-    let corrupted_i32: Vec<i32> = corrupted_tokens.iter().map(|&t| t as i32).collect();
-    let corrupted: Tensor<B, 2, Int> =
-        Tensor::from_data(TensorData::new(corrupted_i32.clone(), [1, 48]), &DEVICE);
-    let c_logits = model.forward(corrupted.narrow(1, 0, 47), 0, false);
+    let corrupted = Tensor::from_vec(corrupted_tokens.clone(), (1, 48), &device)?;
+    let c_logits = model.forward(&corrupted.narrow(1, 0, 47)?, 0, false)?;
     let c_vocab_size = c_logits.dims()[2];
-    let c_logits_flat: Tensor<B, 2> = c_logits.reshape([47, c_vocab_size]);
-    let c_targets_i32: Vec<i32> = corrupted_tokens[1..].iter().map(|&t| t as i32).collect();
-    let c_targets_t: Tensor<B, 1, Int> =
-        Tensor::from_data(TensorData::new(c_targets_i32, [47]), &DEVICE);
-    let corrupted_loss: f32 = cross_entropy_loss(c_logits_flat, c_targets_t).into_scalar();
+    let c_logits_flat = c_logits.reshape((47, c_vocab_size))?;
+    let c_targets = Tensor::from_vec(corrupted_tokens[1..].to_vec(), 47, &device)?;
+    let corrupted_loss: f32 =
+        cross_entropy_loss(&c_logits_flat, &c_targets)?.to_scalar::<f32>()?;
 
     assert!(
         phrase_loss < 7.0,
@@ -895,20 +900,14 @@ fn test_eval_llm() {
         "phrase_loss {phrase_loss} should be < corrupted_loss {corrupted_loss}"
     );
 
-    // KV cache consistency
-    let full = model.forward(tokens.clone().narrow(1, 0, 47), 0, false);
-    let mut model2 = eval_llm();
-    let _prefix = model2.forward(tokens.clone().narrow(1, 0, 46), 0, true);
-    let tail = model2.forward(tokens.narrow(1, 46, 1), 46, true);
+    // KV cache consistency.
+    let full = model.forward(&tokens.narrow(1, 0, 47)?, 0, false)?;
+    let mut model2 = eval_llm()?;
+    let _prefix = model2.forward(&tokens.narrow(1, 0, 46)?, 0, true)?;
+    let tail = model2.forward(&tokens.narrow(1, 46, 1)?, 46, true)?;
 
-    let full_last: Vec<f32> = full
-        .clone()
-        .narrow(1, 46, 1)
-        .flatten::<1>(0, 2)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
-    let tail_vec: Vec<f32> = tail.flatten::<1>(0, 2).into_data().to_vec::<f32>().unwrap();
+    let full_last = to_vec_f32(&full.narrow(1, 46, 1)?)?;
+    let tail_vec = to_vec_f32(&tail)?;
     let max_diff: f32 = full_last
         .iter()
         .zip(tail_vec.iter())
@@ -919,20 +918,18 @@ fn test_eval_llm() {
         "eval_llm KV cache mismatch: max_diff={max_diff}"
     );
 
-    // Outputs should be finite
+    // Outputs should be finite.
     let vocab_dim = full.dims()[2];
-    let first_logits: Vec<f32> = full
-        .narrow(2, 0, 16.min(vocab_dim))
-        .flatten::<1>(0, 2)
-        .into_data()
-        .to_vec::<f32>()
-        .unwrap();
+    let first_logits = to_vec_f32(&full.narrow(2, 0, 16.min(vocab_dim))?)?;
     for v in &first_logits {
         assert!(v.is_finite(), "eval_llm has non-finite logits");
     }
+    Ok(())
 }
 
-// --- Additional edge case and value-verification tests ---
+// ------------------------------------------------------------
+// Additional edge case and value-verification tests
+// ------------------------------------------------------------
 
 #[test]
 fn test_bpe_encode_decode_roundtrip() {
@@ -958,14 +955,12 @@ fn test_text_to_corpus_empty() {
 
 #[test]
 fn test_most_common_pair_tie_breaking() {
-    // When there's a tie, function should still return a valid pair
     let corpus = vec![
         vec!["a".to_string(), "b".to_string()],
         vec!["c".to_string(), "d".to_string()],
     ];
     let counts = vec![1, 1];
     let pair = most_common_pair(&corpus, &counts);
-    // Either (a,b) or (c,d) is valid
     assert!(
         pair == ("a".to_string(), "b".to_string()) || pair == ("c".to_string(), "d".to_string()),
         "Should return one of the tied pairs"
@@ -973,46 +968,42 @@ fn test_most_common_pair_tie_breaking() {
 }
 
 #[test]
-fn test_linear_kaiming_std_various_sizes() {
+fn test_linear_kaiming_std_various_sizes() -> Result<()> {
+    let device = Device::Cpu;
     for in_f in [16, 64, 256] {
-        let layer = Linear::new(in_f, 100, &DEVICE);
-        let w = layer.weight().clone();
-        let mean: f32 = w.clone().mean().into_scalar();
-        let var: f32 = (w - mean).powf_scalar(2.0).mean().into_scalar();
-        let std = (var as f64).sqrt();
-        let expected_std = (2.0 / in_f as f64).sqrt();
+        let layer = Linear::new(in_f, 100, &device)?;
+        let w_data = to_vec_f32(&layer.weight)?;
+        let n = w_data.len() as f32;
+        let mean = w_data.iter().sum::<f32>() / n;
+        let var = w_data.iter().map(|&x| (x - mean).powi(2)).sum::<f32>() / n;
+        let std = var.sqrt();
+        let expected_std = (2.0f32 / in_f as f32).sqrt();
         assert!(
             (std - expected_std).abs() < 0.05,
             "Kaiming init failed for in_f={in_f}: std={std}, expected={expected_std}"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn test_silu_matches_formula() {
-    let x: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![-2.0f32, -1.0, 0.0, 1.0, 2.0, 3.0], [2, 3]),
-        &DEVICE,
-    );
-    let out = silu(x.clone());
-    let expected = torch_silu(
-        x.clone().into_data().to_vec::<f32>().unwrap(),
-        x.dims().to_vec(),
-    );
-    let actual = out.into_data().to_vec::<f32>().unwrap();
+fn test_silu_matches_formula() -> Result<()> {
+    let device = Device::Cpu;
+    let x = Tensor::from_vec(vec![-2.0f32, -1.0, 0.0, 1.0, 2.0, 3.0], (2, 3), &device)?;
+    let out = silu(&x)?;
+    let expected = torch_silu(to_vec_f32(&x)?, x.dims().to_vec());
+    let actual = to_vec_f32(&out)?;
     assert_f32_slice_close(&actual, &expected, 1e-5);
+    Ok(())
 }
 
 #[test]
-fn test_rms_norm_preserves_direction() {
-    // RMS norm should only change magnitude, not direction (sign pattern)
-    let x: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![1.0f32, -2.0, 3.0, -4.0], [1, 4]),
-        &DEVICE,
-    );
-    let out = rms_norm(x.clone(), 1e-5);
-    let x_vals: Vec<f32> = x.into_data().to_vec().unwrap();
-    let out_vals: Vec<f32> = out.into_data().to_vec().unwrap();
+fn test_rms_norm_preserves_direction() -> Result<()> {
+    let device = Device::Cpu;
+    let x = Tensor::from_vec(vec![1.0f32, -2.0, 3.0, -4.0], (1, 4), &device)?;
+    let out = rms_norm(&x, 1e-5)?;
+    let x_vals = to_vec_f32(&x)?;
+    let out_vals = to_vec_f32(&out)?;
     for i in 0..4 {
         assert_eq!(
             x_vals[i].signum(),
@@ -1020,49 +1011,52 @@ fn test_rms_norm_preserves_direction() {
             "rms_norm should preserve sign at index {i}"
         );
     }
+    Ok(())
 }
 
 #[test]
-fn test_cross_entropy_loss_hw5_stable() {
-    let logits: Tensor<B, 2> = Tensor::from_data(
-        TensorData::new(vec![1000.0f32, 1001.0, 999.0, 0.0, 0.0, 0.0], [2, 3]),
-        &DEVICE,
-    );
-    let y: Tensor<B, 1, Int> = Tensor::from_data(TensorData::from([1i32, 0]), &DEVICE);
-    let loss: f32 = cross_entropy_loss(logits, y).into_scalar();
+fn test_cross_entropy_loss_hw5_stable() -> Result<()> {
+    let device = Device::Cpu;
+    let logits = Tensor::from_vec(
+        vec![1000.0f32, 1001.0, 999.0, 0.0, 0.0, 0.0],
+        (2, 3),
+        &device,
+    )?;
+    let y = Tensor::from_vec(vec![1i32, 0], 2, &device)?;
+    let loss: f32 = cross_entropy_loss(&logits, &y)?.to_scalar::<f32>()?;
     assert!(
         loss.is_finite(),
         "cross_entropy_loss must be stable for large logits"
     );
     assert!(loss >= 0.0);
+    Ok(())
 }
 
 #[test]
-fn test_adam_converges_faster_than_random() {
-    // After a few Adam steps, loss should decrease
-    let layer = Linear::new(4, 3, &DEVICE);
-    let params: Vec<Tensor<B, 2>> = vec![layer.weight().clone()];
+fn test_adam_converges_faster_than_random() -> Result<()> {
+    let device = Device::Cpu;
+    let layer = Linear::new(4, 3, &device)?;
+    let params: Vec<Tensor> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8);
 
-    let x: Tensor<B, 2> = Tensor::random([8, 4], Distribution::Normal(0.0, 1.0), &DEVICE);
-    let y: Tensor<B, 1, Int> =
-        Tensor::from_data(TensorData::from([0i32, 1, 2, 0, 1, 2, 0, 1]), &DEVICE);
+    let x = Tensor::randn(0f32, 1f32, (8, 4), &device)?;
+    let y = Tensor::from_vec(vec![0i32, 1, 2, 0, 1, 2, 0, 1], 8, &device)?;
 
-    let logits = layer.forward(x.clone());
-    let loss_before: f32 = cross_entropy_loss(logits, y.clone()).into_scalar();
+    let logits = layer.forward(&x)?;
+    let loss_before: f32 = cross_entropy_loss(&logits, &y)?.to_scalar::<f32>()?;
 
-    // Train for 10 steps
     for _ in 0..10 {
-        let logits = layer.forward(x.clone());
-        let loss = cross_entropy_loss(logits, y.clone());
+        let logits = layer.forward(&x)?;
+        let loss = cross_entropy_loss(&logits, &y)?;
         let grads = loss.backward();
         opt.step(&grads);
     }
 
-    let logits = layer.forward(x);
-    let loss_after: f32 = cross_entropy_loss(logits, y).into_scalar();
+    let logits = layer.forward(&x)?;
+    let loss_after: f32 = cross_entropy_loss(&logits, &y)?.to_scalar::<f32>()?;
     assert!(
         loss_after < loss_before,
         "Adam should reduce loss: before={loss_before}, after={loss_after}"
     );
+    Ok(())
 }

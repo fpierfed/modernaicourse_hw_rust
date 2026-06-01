@@ -3718,7 +3718,8 @@ name = "hw5"
 version = "0.1.0"
 dependencies = [
  "approx",
- "burn",
+ "candle-core",
+ "candle-nn",
  "hf-hub",
  "rand 0.10.1",
  "rand_distr 0.6.0",
@@ -3733,6 +3734,8 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "burn",
+ "candle-core",
+ "candle-nn",
  "hf-hub",
  "rand 0.10.1",
  "rand_distr 0.6.0",
@@ -3749,6 +3752,8 @@ version = "0.1.0"
 dependencies = [
  "approx",
  "burn",
+ "candle-core",
+ "candle-nn",
  "hf-hub",
  "rand 0.10.1",
  "rand_distr 0.6.0",

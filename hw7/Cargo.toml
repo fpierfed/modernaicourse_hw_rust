@@ -5,6 +5,8 @@ edition = "2021"
 
 [dependencies]
 burn = { workspace = true }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
 rand = { workspace = true }
 rand_distr = { workspace = true }
 serde = { workspace = true }
