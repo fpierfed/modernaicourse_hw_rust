@@ -178,8 +178,32 @@ pub fn most_common_pair(corpus: &[Vec<String>], counts: &[usize]) -> (String, St
 }
 
 /// Merge all occurrences of (a, b) into "ab" in the corpus (in-place).
-pub fn merge_pair(_corpus: &mut [Vec<String>], _pair: &(String, String)) {
-    todo!()
+pub fn merge_pair(corpus: &mut [Vec<String>], pair: &(String, String)) {
+    let merged = pair.0.clone() + &pair.1;
+    let pair = &(&pair.0, &pair.1);
+
+    for i in 0..corpus.len() {
+        // Just like in the Python version, make the algo simple by
+        // appending an empty entry to corpus[i]
+        corpus[i].push("".into());
+
+        let mut read: usize = 0;
+        let mut write: usize = 0;
+        while read < corpus[i].len() - 1 {
+            let test_pair = (&corpus[i][read], &corpus[i][read + 1]);
+            if test_pair == *pair {
+                corpus[i][write] = merged.clone();
+                read += 2;
+            } else {
+                // No match: write what we have in read to write and move on
+                corpus[i][write] = corpus[i][read].clone();
+                read += 1;
+            }
+            write += 1;
+        }
+        // Truncate the sequence at and including write
+        corpus[i].truncate(write);
+    }
 }
 
 /// Train BPE tokenizer. Returns (token_to_id, merges).
