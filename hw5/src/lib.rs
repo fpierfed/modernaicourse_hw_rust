@@ -147,20 +147,34 @@ pub fn most_common_pair(corpus: &[Vec<String>], counts: &[usize]) -> (String, St
     assert_eq!(corpus.len(), counts.len(), "Mismatched input lengths!");
 
     let mut counter: HashMap<(&String, &String), usize> = HashMap::new();
+    let mut order: Vec<(&String, &String)> = Vec::new();
 
     for (i, tokens) in corpus.iter().enumerate() {
         let mult_factor = counts[i];
         for pair in tokens.windows(2) {
-            *counter.entry((&pair[0], &pair[1])).or_insert(0) += mult_factor;
+            let pair = (&pair[0], &pair[1]);
+            if !counter.contains_key(&pair) {
+                order.push(pair);
+            }
+            *counter.entry(pair).or_insert(0) += mult_factor;
         }
     }
 
-    let (pair, _) = counter
-        .iter()
-        .max_by_key(|(_, count)| **count)
-        .expect("Found an empty counter?");
-    let pair = *pair;
-    (pair.0.to_string(), pair.1.to_string())
+    let mut first_most_common: (&String, &String) = order[0];
+    let mut max_count: usize = counter[&first_most_common];
+
+    // We could skip the first one, actually!
+    for pair in order {
+        let c = counter[&pair];
+        if c > max_count {
+            max_count = c;
+            first_most_common = pair;
+        }
+    }
+    (
+        first_most_common.0.to_string(),
+        first_most_common.1.to_string(),
+    )
 }
 
 /// Merge all occurrences of (a, b) into "ab" in the corpus (in-place).
