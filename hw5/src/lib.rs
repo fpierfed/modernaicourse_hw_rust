@@ -74,6 +74,9 @@
  * Autoregressively sample tokens using KV cache. Stop at eot_token or max_tokens.
  */
 
+use std::fs::File;
+use std::io::{BufReader, BufWriter, Read, Write};
+
 use candle_core::backprop::GradStore;
 use candle_core::{DType, Device, Result, Tensor, D};
 use candle_nn::ops::{sigmoid, softmax};
@@ -287,12 +290,12 @@ impl Linear {
     pub fn new(in_dim: usize, out_dim: usize, device: &Device) -> Result<Self> {
         let std = (2.0 / in_dim as f32).sqrt();
         Ok(Self {
-            weight: Tensor::randn(0f32, std, (in_dim, out_dim), device)?,
+            weight: Tensor::randn(0f32, std, (out_dim, in_dim), device)?,
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_matmul(&self.weight)
+        x.broadcast_matmul(&self.weight.transpose(D::Minus2, D::Minus1)?)
     }
 }
 
@@ -568,13 +571,49 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
 /// Pre-tokenize a text file into a binary file of u16 token IDs.
 /// Reads chunk_size characters at a time, up to max_chunks chunks.
 pub fn pretokenize_data(
-    _encode_fn: &dyn Fn(&str) -> Vec<u16>,
-    _input_path: &Path,
-    _output_path: &Path,
-    _chunk_size: usize,
-    _max_chunks: Option<usize>,
+    encode_fn: &dyn Fn(&str) -> Vec<u16>,
+    input_path: &Path,
+    output_path: &Path,
+    chunk_size: usize,
+    max_chunks: Option<usize>,
 ) {
-    todo!()
+    let mut left_to_read = match max_chunks {
+        Some(l) => l * chunk_size,
+        _ => usize::MAX,
+    };
+
+    let infd = File::open(input_path).expect("Unable to open input file for reading");
+    let outfd = File::create(output_path).expect("Unable to open output file for writing");
+    let mut reader = BufReader::new(infd);
+    let mut writer = BufWriter::new(outfd);
+
+    let mut text = String::new();
+    while left_to_read > 0 {
+        reader
+            .by_ref()
+            .take(chunk_size as u64)
+            .read_to_string(&mut text)
+            .expect("Unable to read");
+        if text.is_empty() {
+            break;
+        }
+        left_to_read -= chunk_size;
+
+        let encoded: Vec<u16> = encode_fn(&text);
+        let encoded_bytes: Vec<u8> = encoded
+            .iter()
+            .map(|ch| ch.to_le_bytes())
+            .flatten()
+            .collect::<Vec<u8>>();
+
+        writer
+            .by_ref()
+            .write_all(&encoded_bytes)
+            .expect("Unable to write");
+
+        // Avoid adding to the same text...
+        text.clear();
+    }
 }
 
 /// DataLoader: reads pre-tokenized binary file and yields (input, target) batches.
