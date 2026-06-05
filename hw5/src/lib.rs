@@ -265,6 +265,16 @@ pub fn bpe_decode(ids: &[u32], tokens: &HashMap<String, u32>) -> String {
 // Part II: Transformer Architecture
 // ============================================================
 
+// A lot of what follows is from hw4/src/lib.rs
+pub fn build_causal_mask(n: usize, device: &Device) -> Result<Tensor> {
+    let mut data = vec![0f32; n * n];
+    for row in data.chunks_exact_mut(n).enumerate() {
+        let (i, chunk) = row;
+        chunk[i + 1..].fill(f32::NEG_INFINITY);
+    }
+    Tensor::from_vec(data, (n, n), device)
+}
+
 #[derive(Clone, Debug)]
 pub struct Linear {
     // Stored pre-transposed as [in_dim, out_dim] so forward is a single
@@ -294,7 +304,7 @@ pub struct Embedding {
 impl Embedding {
     pub fn new(num_tokens: usize, dim: usize, device: &Device) -> Result<Self> {
         Ok(Self {
-            weight: Tensor::zeros((num_tokens, dim), DType::F32, device)?,
+            weight: Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?,
         })
     }
 
@@ -426,7 +436,6 @@ impl MultiHeadAttentionKVCache {
 pub struct MLP {
     pub w1: Linear,
     pub w2: Linear,
-    pub w3: Linear,
 }
 
 impl MLP {
@@ -434,13 +443,11 @@ impl MLP {
         Ok(Self {
             w1: Linear::new(dim, ffn_dim, device)?,
             w2: Linear::new(ffn_dim, dim, device)?,
-            w3: Linear::new(dim, ffn_dim, device)?,
         })
     }
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        let gate = silu(&self.w1.forward(x)?)?;
-        let up = self.w3.forward(x)?;
-        self.w2.forward(&(gate * up)?)
+        let up = self.w1.forward(x)?;
+        self.w2.forward(&silu(&up)?)
     }
 }
 
@@ -481,28 +488,55 @@ impl TransformerBlock {
 }
 
 #[derive(Clone, Debug)]
-pub struct LLM {}
+pub struct LLM {
+    pub embedding: Embedding,
+    pub pos_embeddings: Tensor,
+    pub layers: Vec<TransformerBlock>,
+    pub output: Linear,
+    pub mask: Tensor,
+}
 
 impl LLM {
     pub fn new(
-        _num_tokens: usize,
-        _dim: usize,
-        _n_heads: usize,
-        _max_seq: usize,
-        _ffn_dim: usize,
-        _num_layers: usize,
-        _device: &Device,
+        num_tokens: usize,
+        dim: usize,
+        n_heads: usize,
+        max_seq: usize,
+        ffn_dim: usize,
+        num_layers: usize,
+        device: &Device,
     ) -> Result<Self> {
-        todo!()
+        Ok(Self {
+            embedding: Embedding::new(num_tokens, dim, device)?,
+            pos_embeddings: Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?,
+            layers: vec![
+                TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device)?;
+                num_layers
+            ],
+            output: Linear::new(dim, num_tokens, device)?,
+            mask: build_causal_mask(max_seq, device)?,
+        })
     }
 
-    pub fn forward(
-        &mut self,
-        _tokens: &Tensor,
-        _seq_pos: usize,
-        _use_cache: bool,
-    ) -> Result<Tensor> {
-        todo!()
+    pub fn forward(&mut self, tokens: &Tensor, seq_pos: usize, use_cache: bool) -> Result<Tensor> {
+        let (_batch, seq_len) = tokens.dims2()?;
+
+        let mut res = self.embedding.forward(tokens)?;
+        let pos = self
+            .pos_embeddings
+            .narrow(0, seq_pos, seq_len)?
+            .unsqueeze(0)?;
+
+        res = res.broadcast_add(&pos)?;
+
+        let mend = seq_pos + seq_len;
+        let mask_slice = self.mask.narrow(0, seq_pos, seq_len)?.narrow(1, 0, mend)?;
+
+        for layer in self.layers.iter_mut() {
+            res = layer.forward(&res, Some(&mask_slice), seq_pos, use_cache)?;
+        }
+        let normalized_res = rms_norm(&res, EPSILON)?;
+        self.output.forward(&normalized_res)
     }
 }
 
@@ -512,8 +546,23 @@ impl LLM {
 
 /// Cross-entropy loss supporting multi-dimensional logits.
 /// logits: (N x k), y: (N) -> scalar.
-pub fn cross_entropy_loss(_logits: &Tensor, _targets: &Tensor) -> Result<Tensor> {
-    todo!()
+pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
+    // In python, we use PyTorch magic reshape(-1) so that we do not need
+    // to wrestle with dimensions etc outselves. Candle has the same, by
+    // passing () instead of -1.
+    //
+    // logits = logits.reshape(-1, logits.shape[-1])
+    // y = y.reshape(-1)
+    // return (-logits[torch.arange(len(y)), y] + torch.logsumexp(logits, dim=-1)).mean()
+
+    let d = *logits.dims().last().unwrap();
+    let logits = logits.reshape(((), d))?;
+    let targets = targets.flatten_all()?.to_dtype(DType::U32)?;
+    (logits.log_sum_exp(D::Minus1)?
+        - logits
+            .gather(&targets.unsqueeze(D::Minus1)?, D::Minus1)?
+            .squeeze(D::Minus1)?)?
+    .mean_all()
 }
 
 /// Pre-tokenize a text file into a binary file of u16 token IDs.

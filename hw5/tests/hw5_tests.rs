@@ -1,6 +1,6 @@
 //! Tests for hw5 — Candle version.
 
-use candle_core::{Device, DType, Result, Tensor};
+use candle_core::{Device, Result, Tensor};
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
@@ -616,11 +616,7 @@ fn test_cross_entropy_loss_3d() -> Result<()> {
     let y_flat = y.reshape(20)?;
     let loss = cross_entropy_loss(&logits_flat, &y_flat)?;
     let val: f32 = loss.to_scalar::<f32>()?;
-    let expected = torch_cross_entropy(
-        to_vec_f32(&logits)?,
-        logits.dims().to_vec(),
-        y_data,
-    );
+    let expected = torch_cross_entropy(to_vec_f32(&logits)?, logits.dims().to_vec(), y_data);
     assert!(val.is_finite() && val > 0.0);
     assert_f32_close(val, expected, 1e-5);
     Ok(())
@@ -888,8 +884,7 @@ fn test_eval_llm() -> Result<()> {
     let c_vocab_size = c_logits.dims()[2];
     let c_logits_flat = c_logits.reshape((47, c_vocab_size))?;
     let c_targets = Tensor::from_vec(corrupted_tokens[1..].to_vec(), 47, &device)?;
-    let corrupted_loss: f32 =
-        cross_entropy_loss(&c_logits_flat, &c_targets)?.to_scalar::<f32>()?;
+    let corrupted_loss: f32 = cross_entropy_loss(&c_logits_flat, &c_targets)?.to_scalar::<f32>()?;
 
     assert!(
         phrase_loss < 7.0,
