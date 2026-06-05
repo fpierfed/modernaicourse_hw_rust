@@ -407,10 +407,9 @@ impl Llama3Simplified {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
             pos_embeddings: Tensor::zeros((max_seq, dim), DType::F32, device)?,
-            layers: vec![
-                TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device)?;
-                num_layers
-            ],
+            layers: (0..num_layers)
+                .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
+                .collect::<Result<Vec<_>>>()?,
             norm: RMSNorm::new(dim, EPSILON, device)?,
             output: Linear::new(dim, num_tokens, device)?,
             mask: build_causal_mask(max_seq, device)?,

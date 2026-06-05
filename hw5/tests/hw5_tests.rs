@@ -496,7 +496,7 @@ fn test_multi_head_attention_kv_cache() -> Result<()> {
     assert_eq!(full.dims(), &[1, 5, 12]);
 
     // Prefix + tail with cache.
-    let mut attn2 = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
+    let mut attn2 = attn.clone();
     let prefix_mask = causal_mask(3, &device)?;
     let _prefix = attn2.forward(&x.narrow(1, 0, 3)?, Some(&prefix_mask), 0, true)?;
     let tail_mask = mask.narrow(0, 3, 2)?;
@@ -538,7 +538,7 @@ fn test_transformer_block() -> Result<()> {
     assert_eq!(full.dims(), &[1, 5, 12]);
 
     // KV cache consistency.
-    let mut block2 = TransformerBlock::new(12, 3, 16, 8, &device)?;
+    let mut block2 = block.clone();
     let prefix_mask = causal_mask(3, &device)?;
     let _prefix = block2.forward(&x.narrow(1, 0, 3)?, Some(&prefix_mask), 0, true)?;
     let tail_mask = mask.narrow(0, 3, 2)?;
@@ -561,6 +561,32 @@ fn test_transformer_block() -> Result<()> {
 // ---------- LLM ----------
 
 #[test]
+fn test_llm_hw4() -> Result<()> {
+    let device = Device::Cpu;
+    let mut model = LLM::new(10, 8, 2, 8, 12, 2, &device)?;
+    let tokens = Tensor::from_vec(vec![0u32, 1, 2, 3], (1, 4), &device)?;
+
+    let full = model.forward(&tokens, 0, false)?;
+    assert_eq!(full.dims(), &[1, 4, 10]);
+
+    let mut model2 = model.clone();
+    let prefix_tokens = Tensor::from_vec(vec![0u32, 1, 2], (1, 3), &device)?;
+    let _prefix = model2.forward(&prefix_tokens, 0, true)?;
+    let tail_tokens = Tensor::from_vec(vec![3u32], (1, 1), &device)?;
+    let tail = model2.forward(&tail_tokens, 3, true)?;
+
+    let full_last = to_vec_f32(&full.narrow(1, 3, 1)?)?;
+    let tail_vec = to_vec_f32(&tail)?;
+    let max_diff: f32 = full_last
+        .iter()
+        .zip(tail_vec.iter())
+        .map(|(a, b)| (a - b).abs())
+        .fold(0.0f32, f32::max);
+    assert!(max_diff < 3e-4, "LLM KV cache mismatch: {max_diff}");
+    Ok(())
+}
+
+#[test]
 fn test_llm() -> Result<()> {
     let device = Device::Cpu;
     let mut model = LLM::new(11, 12, 3, 8, 16, 2, &device)?;
@@ -570,7 +596,7 @@ fn test_llm() -> Result<()> {
     assert_eq!(out.dims(), &[1, 5, 11]);
 
     // KV cache consistency.
-    let mut model2 = LLM::new(11, 12, 3, 8, 16, 2, &device)?;
+    let mut model2 = model.clone();
     let _prefix = model2.forward(&tokens.narrow(1, 0, 3)?, 0, true)?;
     let tail = model2.forward(&tokens.narrow(1, 3, 2)?, 3, true)?;
 

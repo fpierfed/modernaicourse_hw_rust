@@ -512,10 +512,9 @@ impl LLM {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
             pos_embeddings: Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?,
-            layers: vec![
-                TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device)?;
-                num_layers
-            ],
+            layers: (0..num_layers)
+                .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
+                .collect::<Result<Vec<_>>>()?,
             output: Linear::new(dim, num_tokens, device)?,
             mask: build_causal_mask(max_seq, device)?,
         })
