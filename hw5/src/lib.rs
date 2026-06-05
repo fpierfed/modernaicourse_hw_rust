@@ -120,6 +120,10 @@ fn split_keeping_whitespace(text: &str) -> Vec<&str> {
     res
 }
 
+fn string_to_vec_string(s: &str) -> Vec<String> {
+    s.chars().map(|c| c.to_string()).collect()
+}
+
 pub fn text_to_corpus(text: &str) -> (Vec<Vec<String>>, Vec<usize>) {
     let mut counter: HashMap<&str, usize> = HashMap::new();
     let mut order: Vec<&str> = Vec::new();
@@ -135,7 +139,7 @@ pub fn text_to_corpus(text: &str) -> (Vec<Vec<String>>, Vec<usize>) {
     }
 
     for token in order {
-        keys.push(token.chars().map(|c| c.to_string()).collect());
+        keys.push(string_to_vec_string(token));
         counts.push(counter[token]);
     }
     (keys, counts)
@@ -208,22 +212,51 @@ pub fn merge_pair(corpus: &mut [Vec<String>], pair: &(String, String)) {
 
 /// Train BPE tokenizer. Returns (token_to_id, merges).
 /// vocab_size is the target vocabulary size (starts from 256 base characters).
-pub fn train_bpe(_text: &str, _vocab_size: usize) -> (HashMap<String, u32>, Vec<(String, String)>) {
-    todo!()
+pub fn train_bpe(text: &str, vocab_size: usize) -> (HashMap<String, u32>, Vec<(String, String)>) {
+    // We assume that we only have to deal with the ASCII set
+    let mut tokens: Vec<String> = (0..256)
+        .filter_map(|i| char::from_u32(i).map(|c| c.to_string()))
+        .collect();
+    let mut merges: Vec<(String, String)> = Vec::new();
+
+    let (mut corpus, counts) = text_to_corpus(text);
+
+    while tokens.len() < vocab_size {
+        let pair = most_common_pair(&corpus, &counts);
+        merge_pair(&mut corpus, &pair);
+        let merged = pair.0.clone() + &pair.1;
+        merges.push(pair);
+        tokens.push(merged);
+    }
+
+    let token_index: HashMap<String, u32> = tokens.into_iter().zip(0..).collect();
+    (token_index, merges)
 }
 
 /// Encode a string using trained BPE merges and token map.
 pub fn bpe_encode(
-    _text: &str,
-    _merges: &[(String, String)],
-    _tokens: &HashMap<String, u32>,
+    text: &str,
+    merges: &[(String, String)],
+    tokens: &HashMap<String, u32>,
 ) -> Vec<u32> {
-    todo!()
+    let mut raw_corpus: Vec<Vec<String>> = split_keeping_whitespace(text)
+        .iter()
+        .map(|s| string_to_vec_string(s))
+        .collect();
+    for pair in merges {
+        merge_pair(&mut raw_corpus, pair);
+    }
+    let flattened_corpus: Vec<&String> = raw_corpus.iter().flatten().collect();
+    flattened_corpus.iter().map(|ch| tokens[*ch]).collect()
 }
 
 /// Decode a list of token IDs back to a string.
-pub fn bpe_decode(_ids: &[u32], _tokens: &HashMap<String, u32>) -> String {
-    todo!()
+pub fn bpe_decode(ids: &[u32], tokens: &HashMap<String, u32>) -> String {
+    let reverse_mapping: HashMap<&u32, &String> = tokens.iter().map(|(ch, i)| (i, ch)).collect();
+    // collect() does the right thing here and joins the pieces together.
+    // we do need to move out of &String items and use &str instead for the
+    // collect (which does a join()) to work.
+    ids.iter().map(|id| reverse_mapping[id].as_str()).collect()
 }
 
 // ============================================================
