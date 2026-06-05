@@ -108,7 +108,9 @@ fn split_keeping_whitespace(text: &str) -> Vec<&str> {
     let mut word_start = 0;
     let mut res: Vec<&str> = vec![];
 
-    for (i, ch) in text.chars().enumerate() {
+    // We use .char_indices() instead of .chars() because we are in Unicode
+    // land and we do not want to cut through half a unicode glyph!
+    for (i, ch) in text.char_indices() {
         if ch.is_whitespace() && i > word_start {
             res.push(&text[word_start..i]);
             word_start = i;
