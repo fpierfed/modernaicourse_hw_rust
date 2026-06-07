@@ -702,7 +702,7 @@ fn test_adam() -> Result<()> {
     let layer = Linear::new(6, 3, &device)?;
 
     let params: Vec<Tensor> = vec![layer.weight.clone()];
-    let mut opt = Adam::new(params.clone(), 1e-3, (0.9, 0.95), 1e-8);
+    let mut opt = Adam::new(params.clone(), 1e-3, (0.9, 0.95), 1e-8)?;
 
     let w_before = to_vec_f32(&params[0])?;
 
@@ -732,7 +732,7 @@ fn test_adam_zero_grad() -> Result<()> {
     let layer = Linear::new(4, 3, &device)?;
 
     let params: Vec<Tensor> = vec![layer.weight.clone()];
-    let mut opt = Adam::new(params.clone(), 1e-2, (0.9, 0.999), 1e-8);
+    let mut opt = Adam::new(params.clone(), 1e-2, (0.9, 0.999), 1e-8)?;
 
     // Create gradients.
     let x = Tensor::randn(0f32, 1f32, (4, 4), &device)?;
@@ -762,7 +762,7 @@ fn test_train_llm() -> Result<()> {
     let layer = Linear::new(4, 5, &device)?;
 
     let params: Vec<Tensor> = vec![layer.weight.clone()];
-    let mut opt = Adam::new(params.clone(), 0.01, (0.9, 0.999), 1e-8);
+    let mut opt = Adam::new(params.clone(), 0.01, (0.9, 0.999), 1e-8)?;
 
     let w_before = to_vec_f32(&params[0])?;
 
@@ -1058,7 +1058,7 @@ fn test_adam_converges_faster_than_random() -> Result<()> {
     let device = Device::Cpu;
     let layer = Linear::new(4, 3, &device)?;
     let params: Vec<Tensor> = vec![layer.weight.clone()];
-    let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8);
+    let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8)?;
 
     let x = Tensor::randn(0f32, 1f32, (8, 4), &device)?;
     let y = Tensor::from_vec(vec![0i32, 1, 2, 0, 1, 2, 0, 1], 8, &device)?;
