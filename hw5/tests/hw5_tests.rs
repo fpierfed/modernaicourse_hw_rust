@@ -681,7 +681,7 @@ fn test_dataloader_file() -> Result<()> {
     }
     drop(f);
 
-    let loader = DataLoader::new(&path, 3, 2);
+    let loader = DataLoader::new(&path, 3, 2, &Device::Cpu)?;
     let batches: Vec<_> = loader.collect();
 
     assert_eq!(batches.len(), 3);

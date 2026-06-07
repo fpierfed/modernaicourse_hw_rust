@@ -75,7 +75,7 @@
  */
 
 use std::fs::File;
-use std::io::{BufReader, BufWriter, Read, Write};
+use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 use candle_core::backprop::GradStore;
 use candle_core::{DType, Device, Result, Tensor, D};
@@ -634,16 +634,79 @@ pub fn pretokenize_data(
 
 /// DataLoader: reads pre-tokenized binary file and yields (input, target) batches.
 /// Each sample is seq_len tokens; target is shifted by 1.
-pub struct DataLoader {}
+pub struct DataLoader {
+    pub path: Box<Path>,
+    pub seq_len: usize,
+    pub batch_size: usize,
+    pub device: Device,
+
+    num_batches: usize,
+    chunk_size_bytes: usize,
+    current_batch: usize,
+    reader: BufReader<File>,
+}
+
 impl DataLoader {
-    pub fn new(_path: &Path, _seq_len: usize, _batch_size: usize) -> Self {
-        todo!()
+    pub fn new(path: &Path, seq_len: usize, batch_size: usize, device: &Device) -> Result<Self> {
+        let chunk_size_tokens = batch_size * (seq_len + 1);
+        let fd = File::open(path)?;
+
+        Ok(Self {
+            path: path.into(),
+            seq_len,
+            batch_size,
+            device: device.clone(),
+            num_batches: seq_len * batch_size * 2,
+            chunk_size_bytes: chunk_size_tokens * 2,
+            current_batch: 0,
+            reader: BufReader::new(fd),
+        })
+    }
+
+    fn next_impl(&mut self) -> Result<Option<(Tensor, Tensor)>> {
+        let pos = self.current_batch * self.seq_len * self.batch_size * 2;
+        self.reader.seek(SeekFrom::Start(pos as u64))?;
+
+        let mut data = vec![0u8; self.chunk_size_bytes];
+        match self.reader.read_exact(&mut data) {
+            Ok(()) => {}
+            Err(ref e) if e.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+            Err(e) => return Err(candle_core::Error::wrap(e)),
+        }
+
+        self.current_batch += 1;
+        if self.current_batch > self.num_batches {
+            return Ok(None);
+        }
+
+        // Interpret u16 little-endian bytes to i32 tokens
+        let data_u16: Vec<u16> = data
+            .chunks_exact(2)
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .collect();
+
+        let data_i32: Vec<i32> = data_u16.iter().map(|&x| x as i32).collect();
+
+        let tokens = Tensor::from_vec(data_i32, (self.batch_size, self.seq_len + 1), &self.device)?;
+
+        // Shift targets by 1: input is [:, :-1], target is [:, 1:]
+        let x = tokens.narrow(1, 0, self.seq_len)?;
+        let y = tokens.narrow(1, 1, self.seq_len)?;
+
+        Ok(Some((x, y)))
     }
 }
+
 impl Iterator for DataLoader {
     type Item = (Tensor, Tensor);
+
     fn next(&mut self) -> Option<Self::Item> {
-        todo!()
+        match self.next_impl() {
+            Ok(batch) => batch,
+            Err(e) => {
+                panic!("DataLoader failed during iteration: {:?}", e);
+            }
+        }
     }
 }
 
