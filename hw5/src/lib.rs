@@ -714,7 +714,7 @@ impl Iterator for DataLoader {
 
 /// Adam optimizer.
 pub struct Adam {
-    params: Vec<Tensor>,
+    params: Vec<Var>,
     lr: f32,
     beta1: f32,
     beta2: f32,
@@ -725,7 +725,7 @@ pub struct Adam {
 }
 
 impl Adam {
-    fn init_from_params(params: &Vec<Tensor>) -> Result<Vec<Tensor>> {
+    fn init_from_params(params: &[Tensor]) -> Result<Vec<Tensor>> {
         params
             .iter()
             .map(|p| p.zeros_like())
@@ -735,9 +735,13 @@ impl Adam {
     pub fn new(params: Vec<Tensor>, lr: f32, betas: (f32, f32), eps: f32) -> Result<Self> {
         let u = Self::init_from_params(&params)?;
         let v = Self::init_from_params(&params)?;
+        let param_vars: Vec<Var> = params
+            .iter()
+            .map(|p| Var::from_tensor(&p).unwrap())
+            .collect::<Vec<Var>>();
 
         Ok(Self {
-            params,
+            params: param_vars,
             lr,
             beta1: betas.0,
             beta2: betas.1,
@@ -749,6 +753,10 @@ impl Adam {
     }
 
     pub fn step(&mut self, grads: &Result<GradStore>) {
+        self.step_helper(grads).expect("Error in Adam step");
+    }
+
+    fn step_helper(&mut self, grads: &Result<GradStore>) -> Result<()> {
         if grads.is_err() {
             panic!("Gradiens are not correctly computed!");
         }
@@ -760,39 +768,37 @@ impl Adam {
                 None => continue,
             };
 
-            self.u[i] = ((self.u[i].clone() * (self.beta1 as f64)).unwrap()
-                + (1.0 - self.beta1 as f64) * grad)
-                .unwrap();
-            self.v[i] = ((self.v[i].clone() * (self.beta2 as f64)).unwrap()
-                + (1.0 - self.beta2 as f64) * grad * grad)
-                .unwrap();
+            self.u[i] =
+                ((self.u[i].clone() * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * grad)?;
+            self.v[i] = ((self.v[i].clone() * (self.beta2 as f64))?
+                + (1.0 - self.beta2 as f64) * grad * grad)?;
 
-            let u_hat =
-                (self.u[i].clone() / (1.0 - self.beta1.powi(self.t as i32) as f64)).unwrap();
-            let v_hat =
-                (self.v[i].clone() / (1.0 - self.beta2.powi(self.t as i32) as f64)).unwrap();
+            let u_hat = (self.u[i].clone() / (1.0 - self.beta1.powi(self.t as i32) as f64))?;
+            let v_hat = (self.v[i].clone() / (1.0 - self.beta2.powi(self.t as i32) as f64))?;
 
-            let updated_p = (&*p
-                - ((u_hat * (self.lr as f64)).unwrap()
-                    / (v_hat.sqrt().unwrap() + self.eps as f64).unwrap())
-                .unwrap())
-            .unwrap()
-            .contiguous()
-            .unwrap();
+            let updated_p = (p.clone().as_tensor()
+                - ((u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?
+                .contiguous()?;
 
-            p.slice_set(&updated_p, 0, 0).unwrap();
+            p.slice_set(&updated_p, 0, 0)?;
         }
         self.t += 1;
+        Ok(())
     }
 
     pub fn zero_grad(&mut self) {
-        // Whipe u and v tensor
+        self.zero_grad_helper().expect("Unable to zero gradients");
+    }
+
+    pub fn zero_grad_helper(&mut self) -> Result<()> {
+        // Wipe u and v tensor
         for t in self.u.iter_mut() {
-            *t = t.zeros_like().unwrap();
+            *t = t.zeros_like()?;
         }
         for t in self.v.iter_mut() {
-            *t = t.zeros_like().unwrap();
+            *t = t.zeros_like()?;
         }
+        Ok(())
     }
 }
 
