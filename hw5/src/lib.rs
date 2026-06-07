@@ -191,27 +191,27 @@ pub fn merge_pair(corpus: &mut [Vec<String>], pair: &(String, String)) {
     let merged = pair.0.clone() + &pair.1;
     let pair = &(&pair.0, &pair.1);
 
-    for i in 0..corpus.len() {
+    for element in corpus {
         // Just like in the Python version, make the algo simple by
-        // appending an empty entry to corpus[i]
-        corpus[i].push("".into());
+        // appending an empty entry to element (i.e. corpus[i])
+        element.push("".into());
 
         let mut read: usize = 0;
         let mut write: usize = 0;
-        while read < corpus[i].len() - 1 {
-            let test_pair = (&corpus[i][read], &corpus[i][read + 1]);
+        while read < element.len() - 1 {
+            let test_pair = (&element[read], &element[read + 1]);
             if test_pair == *pair {
-                corpus[i][write] = merged.clone();
+                element[write] = merged.clone();
                 read += 2;
             } else {
                 // No match: write what we have in read to write and move on
-                corpus[i][write] = corpus[i][read].clone();
+                element[write] = element[read].clone();
                 read += 1;
             }
             write += 1;
         }
         // Truncate the sequence at and including write
-        corpus[i].truncate(write);
+        element.truncate(write);
     }
 }
 
@@ -622,8 +622,7 @@ pub fn pretokenize_data(
         let encoded: Vec<u16> = encode_fn(&text);
         let encoded_bytes: Vec<u8> = encoded
             .iter()
-            .map(|ch| ch.to_le_bytes())
-            .flatten()
+            .flat_map(|ch| ch.to_le_bytes())
             .collect::<Vec<u8>>();
 
         writer
@@ -739,7 +738,7 @@ impl Adam {
         let v = Self::init_from_params(&params)?;
         let param_vars: Vec<Var> = params
             .iter()
-            .map(|p| Var::from_tensor(&p).unwrap())
+            .map(|p| Var::from_tensor(p).unwrap())
             .collect::<Vec<Var>>();
 
         Ok(Self {
@@ -765,7 +764,7 @@ impl Adam {
         let grads = grads.as_ref().unwrap();
 
         for (i, p) in self.params.iter_mut().enumerate() {
-            let grad = match grads.get(&p) {
+            let grad = match grads.get(p) {
                 Some(g) => g,
                 None => continue,
             };
@@ -807,11 +806,11 @@ impl Adam {
 /// Train the LLM for one pass over the data loader.
 pub fn train_llm(
     model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    loader: &Vec<(Tensor, Tensor)>,
+    loader: &[(Tensor, Tensor)],
     optimizer: &mut Adam,
 ) {
     for (x, y) in loader.iter() {
-        let y_hat = model(&x).unwrap();
+        let y_hat = model(x).unwrap();
         let loss = cross_entropy_loss(&y_hat, y).unwrap();
 
         optimizer.zero_grad();
