@@ -804,11 +804,20 @@ impl Adam {
 
 /// Train the LLM for one pass over the data loader.
 pub fn train_llm(
-    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    _loader: &Vec<(Tensor, Tensor)>,
-    _optimizer: &mut Adam,
+    model: &dyn Fn(&Tensor) -> Result<Tensor>,
+    loader: &Vec<(Tensor, Tensor)>,
+    optimizer: &mut Adam,
 ) {
-    todo!()
+    for (x, y) in loader.iter() {
+        let y_hat = model(&x).unwrap();
+        let loss = cross_entropy_loss(&y_hat, y).unwrap();
+
+        optimizer.zero_grad();
+        let grads = loss.backward();
+        optimizer.step(&grads);
+
+        println!("Tokens: {}: loss: {}", x.dim(D::Minus1).unwrap(), loss);
+    }
 }
 
 /// Generate tokens autoregressively with temperature sampling and KV cache.
