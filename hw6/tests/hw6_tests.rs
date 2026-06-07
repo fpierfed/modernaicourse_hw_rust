@@ -1,6 +1,6 @@
 //! Tests for hw6 — Candle version.
 
-use candle_core::{Device, DType, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use hw6::*;
 use test_support::{as_f32_vec, assert_f32_close, assert_f32_slice_close, json, python_json};
 
@@ -138,7 +138,15 @@ fn test_get_loss_mask_multiple_regions() {
     let assistant_start: u32 = 93;
     let assistant_end: u32 = 94;
     let tokens = vec![
-        91, 10, assistant_start, 20, 21, assistant_end, assistant_start, 30, assistant_end,
+        91,
+        10,
+        assistant_start,
+        20,
+        21,
+        assistant_end,
+        assistant_start,
+        30,
+        assistant_end,
     ];
     let expected = vec![false, false, false, true, true, true, false, true, true];
     assert_eq!(
@@ -369,21 +377,16 @@ fn test_softplus_at_zero() -> Result<()> {
 #[test]
 fn test_dpo_loss_shape() -> Result<()> {
     let device = Device::Cpu;
-    let model = |_x: &Tensor| -> Result<Tensor> {
-        Tensor::zeros((2, 3, 3), DType::F32, &device)
-    };
-    let model_ref = |_x: &Tensor| -> Result<Tensor> {
-        Tensor::zeros((2, 3, 3), DType::F32, &device)
-    };
+    let model = |_x: &Tensor| -> Result<Tensor> { Tensor::zeros((2, 3, 3), DType::F32, &device) };
+    let model_ref =
+        |_x: &Tensor| -> Result<Tensor> { Tensor::zeros((2, 3, 3), DType::F32, &device) };
 
     let xp = Tensor::from_vec(vec![0i32, 1, 2, 1, 2, 0], (2, 3), &device)?;
     let yp = Tensor::from_vec(vec![1i32, 2, 0, 2, 0, 1], (2, 3), &device)?;
-    let maskp =
-        Tensor::from_vec(vec![1.0f32, 1.0, 0.0, 0.0, 1.0, 1.0], (2, 3), &device)?;
+    let maskp = Tensor::from_vec(vec![1.0f32, 1.0, 0.0, 0.0, 1.0, 1.0], (2, 3), &device)?;
     let xn = Tensor::from_vec(vec![0i32, 2, 1, 2, 1, 0], (2, 3), &device)?;
     let yn = Tensor::from_vec(vec![2i32, 0, 1, 1, 0, 2], (2, 3), &device)?;
-    let maskn =
-        Tensor::from_vec(vec![1.0f32, 0.0, 1.0, 1.0, 1.0, 0.0], (2, 3), &device)?;
+    let maskn = Tensor::from_vec(vec![1.0f32, 0.0, 1.0, 1.0, 1.0, 0.0], (2, 3), &device)?;
 
     let loss = dpo_loss(&model, &model_ref, &xp, &yp, &maskp, &xn, &yn, &maskn, 0.3)?;
     assert_eq!(loss.dims(), &[2]);

@@ -1,6 +1,6 @@
 //! Tests for hw7 — Candle version.
 
-use candle_core::{Device, DType, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use hw7::*;
 use std::collections::HashMap;
 
@@ -67,9 +67,8 @@ fn test_generate_parallel_basic() -> Result<()> {
         let count = *call_count.borrow();
         let step_tokens = &next_tokens[count];
         for i in 0..batch {
-            data[i * seq_len * vocab_size
-                + (seq_len - 1) * vocab_size
-                + step_tokens[i] as usize] = 0.0;
+            data[i * seq_len * vocab_size + (seq_len - 1) * vocab_size + step_tokens[i] as usize] =
+                0.0;
         }
         call_count.replace(count + 1);
         Tensor::from_vec(data, (batch, seq_len, vocab_size), &device)
@@ -325,9 +324,18 @@ fn test_grade_responses() -> Result<()> {
     let row1_text = "<THINK>b</THINK><ANSWER>4</ANSWER>";
     let row2_text = "<THINK>c</THINK>";
 
-    let r0: Vec<i32> = char_encode(row0_text).into_iter().map(|x| x as i32).collect();
-    let r1: Vec<i32> = char_encode(row1_text).into_iter().map(|x| x as i32).collect();
-    let r2: Vec<i32> = char_encode(row2_text).into_iter().map(|x| x as i32).collect();
+    let r0: Vec<i32> = char_encode(row0_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
+    let r1: Vec<i32> = char_encode(row1_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
+    let r2: Vec<i32> = char_encode(row2_text)
+        .into_iter()
+        .map(|x| x as i32)
+        .collect();
     let max_len = r0.len().max(r1.len()).max(r2.len());
     let mut data: Vec<i32> = Vec::new();
     for row in [&r0, &r1, &r2] {

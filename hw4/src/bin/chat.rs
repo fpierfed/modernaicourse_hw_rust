@@ -98,8 +98,6 @@ fn main() -> Result<()> {
 
     let n_tokens = generated.len();
     let tps = n_tokens as f64 / elapsed.as_secs_f64();
-    println!(
-        "\n\n[generated {n_tokens} tokens in {elapsed:.2?} ({tps:.1} tok/s)]"
-    );
+    println!("\n\n[generated {n_tokens} tokens in {elapsed:.2?} ({tps:.1} tok/s)]");
     Ok(())
 }

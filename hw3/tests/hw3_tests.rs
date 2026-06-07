@@ -355,7 +355,7 @@ fn test_multi_layer_nn_single_hidden() {
 mod mnist {
     use burn::tensor::{Int, Tensor, TensorData};
     use flate2::read::GzDecoder;
-    use hw3::{DEVICE, MyAutodiffBackend};
+    use hw3::{MyAutodiffBackend, DEVICE};
     use std::io::Read;
 
     const MIRRORS: &[&str] = &[
