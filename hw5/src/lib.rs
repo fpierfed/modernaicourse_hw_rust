@@ -137,10 +137,16 @@ pub fn text_to_corpus(text: &str) -> (Vec<Vec<String>>, Vec<usize>) {
     let mut counts: Vec<usize> = vec![];
 
     for token in split_keeping_whitespace(text) {
-        if !counter.contains_key(token) {
+        // if !counter.contains_key(token) {
+        //     order.push(token);
+        // }
+        // *counter.entry(token).or_insert(0) += 1;
+        //
+        // Same thing as above, but more efficient?
+        *counter.entry(token).or_insert_with(|| {
             order.push(token);
-        }
-        *counter.entry(token).or_insert(0) += 1;
+            0
+        }) += 1;
     }
 
     for token in order {
@@ -162,10 +168,16 @@ pub fn most_common_pair(corpus: &[Vec<String>], counts: &[usize]) -> (String, St
         let mult_factor = counts[i];
         for pair in tokens.windows(2) {
             let pair = (&pair[0], &pair[1]);
-            if !counter.contains_key(&pair) {
+            // if !counter.contains_key(&pair) {
+            //     order.push(pair);
+            // }
+            // *counter.entry(pair).or_insert(0) += mult_factor;
+            //
+            // Just as above, more efficient.
+            *counter.entry(pair).or_insert_with(|| {
                 order.push(pair);
-            }
-            *counter.entry(pair).or_insert(0) += mult_factor;
+                0
+            }) += mult_factor;
         }
     }
 
@@ -809,16 +821,29 @@ pub fn train_llm(
     loader: &[(Tensor, Tensor)],
     optimizer: &mut Adam,
 ) {
+    if let Ok(()) = train_llm_helper(model, loader, optimizer) {
+        println!("Training complete");
+    } else {
+        println!("Training aborted due to error");
+    }
+}
+
+pub fn train_llm_helper(
+    model: &dyn Fn(&Tensor) -> Result<Tensor>,
+    loader: &[(Tensor, Tensor)],
+    optimizer: &mut Adam,
+) -> Result<()> {
     for (x, y) in loader.iter() {
-        let y_hat = model(x).unwrap();
-        let loss = cross_entropy_loss(&y_hat, y).unwrap();
+        let y_hat = model(x)?;
+        let loss = cross_entropy_loss(&y_hat, y)?;
 
         optimizer.zero_grad();
         let grads = loss.backward();
         optimizer.step(&grads);
 
-        println!("Tokens: {}: loss: {}", x.dim(D::Minus1).unwrap(), loss);
+        println!("Tokens: {}: loss: {}", x.dim(D::Minus1)?, loss);
     }
+    Ok(())
 }
 
 /// Generate tokens autoregressively with temperature sampling and KV cache.
