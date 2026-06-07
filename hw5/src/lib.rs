@@ -289,14 +289,16 @@ pub struct Linear {
 impl Linear {
     pub fn new(in_dim: usize, out_dim: usize, device: &Device) -> Result<Self> {
         let std = (2.0 / in_dim as f32).sqrt();
-        let weight = Var::from_tensor(&Tensor::randn(0f32, std, (out_dim, in_dim), device)?)?;
+
+        // We store the weights pre-transposed for performance reasons.
+        let weight = Var::from_tensor(&Tensor::randn(0f32, std, (in_dim, out_dim), device)?)?;
         Ok(Self {
             weight: weight.as_tensor().clone(),
         })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_matmul(&self.weight.transpose(D::Minus2, D::Minus1)?)
+        x.broadcast_matmul(&self.weight)
     }
 }
 

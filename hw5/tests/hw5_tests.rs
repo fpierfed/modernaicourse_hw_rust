@@ -18,6 +18,7 @@ fn to_vec_i32(t: &Tensor) -> Result<Vec<i32>> {
 
 // ---------- PyTorch ground-truth helpers ----------
 
+// Rember that we store Linear.weight pre-transposed!
 fn torch_linear(
     x: Vec<f32>,
     x_shape: Vec<usize>,
@@ -33,7 +34,7 @@ import torch.nn.functional as F
 
 d = json.load(sys.stdin)
 x = torch.tensor(d["x"], dtype=torch.float32).reshape(d["x_shape"])
-w = torch.tensor(d["weight"], dtype=torch.float32).reshape(d["weight_shape"])
+w = torch.tensor(d["weight"], dtype=torch.float32).reshape(d["weight_shape"]).T
 json.dump(F.linear(x, w).flatten().tolist(), sys.stdout)
 "#,
         json!({ "x": x, "x_shape": x_shape, "weight": weight, "weight_shape": weight_shape }),
