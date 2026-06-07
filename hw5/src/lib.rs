@@ -557,14 +557,31 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
     // y = y.reshape(-1)
     // return (-logits[torch.arange(len(y)), y] + torch.logsumexp(logits, dim=-1)).mean()
 
-    let d = *logits.dims().last().unwrap();
+    let d = logits.dim(D::Minus1)?;
+
+    // Here we are following PyTorch:
+    // logits = logits.reshape(-1, logits.shape[-1])
+    // where for convenience we have set d=logits.shape[-1]
+    // and we then flattren targets/y
+    // One difference is that candle requires us to cast targets to u32
+    // to use in the gather operation below.
     let logits = logits.reshape(((), d))?;
     let targets = targets.flatten_all()?.to_dtype(DType::U32)?;
-    (logits.log_sum_exp(D::Minus1)?
-        - logits
-            .gather(&targets.unsqueeze(D::Minus1)?, D::Minus1)?
-            .squeeze(D::Minus1)?)?
-    .mean_all()
+
+    // Here PyTorch would allow us to simply do a
+    // logits[torch.arange(len(y)), y]
+    // In candle, we need to gather-unsqueeze-squeeze:
+    // gather needs a 2D index tensor, since logits now is 2D and
+    // hence the unsqueeze on what we use as indices...
+    let gathered = logits
+        .gather(&targets.unsqueeze(D::Minus1)?, D::Minus1)?
+        .squeeze(D::Minus1)?;
+    // Loss computation is the same, pretty much...
+    let loss = (logits.log_sum_exp(D::Minus1)? - gathered)?;
+
+    // Finally, compute the average across all dimension and return
+    // a scalar tensor, just like the PyTorch .mean() does.
+    loss.mean_all()
 }
 
 /// Pre-tokenize a text file into a binary file of u16 token IDs.
