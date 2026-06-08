@@ -309,7 +309,7 @@ fn test_bpe_decode() {
 
 #[test]
 fn test_linear() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(10, 20, &device)?;
 
     let x = Tensor::randn(0f32, 1f32, (50, 10), &device)?;
@@ -334,7 +334,7 @@ fn test_linear() -> Result<()> {
 
 #[test]
 fn test_linear_kaiming_init() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(100, 1000, &device)?;
     let w_data = to_vec_f32(&layer.weight)?;
     let n = w_data.len() as f32;
@@ -353,7 +353,7 @@ fn test_linear_kaiming_init() -> Result<()> {
 
 #[test]
 fn test_embedding() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Embedding::new(200, 20, &device)?;
 
     let y = Tensor::from_vec(vec![0u32, 5, 10, 199], (1, 4), &device)?;
@@ -374,7 +374,7 @@ fn test_embedding() -> Result<()> {
 
 #[test]
 fn test_embedding_std_init() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Embedding::new(1000, 100, &device)?;
     let w_data = to_vec_f32(&layer.weight)?;
     let n = w_data.len() as f32;
@@ -392,7 +392,7 @@ fn test_embedding_std_init() -> Result<()> {
 
 #[test]
 fn test_silu() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let x = Tensor::randn(0f32, 1f32, (10, 20), &device)?;
     let out = silu(&x)?;
     let expected = torch_silu(to_vec_f32(&x)?, x.dims().to_vec());
@@ -410,7 +410,7 @@ fn test_silu() -> Result<()> {
 
 #[test]
 fn test_rms_norm() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let x = Tensor::from_vec(
         vec![1.0f32, -1.0, 0.5, 0.5, 2.0, 0.0, -2.0, 1.0],
         (2, 4),
@@ -433,7 +433,7 @@ fn test_rms_norm() -> Result<()> {
 
 #[test]
 fn test_self_attention_causal() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let q = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
     let k = Tensor::randn(0f32, 1f32, (5, 8), &device)?;
     let v = Tensor::randn(0f32, 1f32, (5, 6), &device)?;
@@ -463,7 +463,7 @@ fn test_self_attention_causal() -> Result<()> {
 
 #[test]
 fn test_self_attention_batched() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let q = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
     let k = Tensor::randn(0f32, 1f32, (2, 3, 5, 8), &device)?;
     let v = Tensor::randn(0f32, 1f32, (2, 3, 5, 4), &device)?;
@@ -488,7 +488,7 @@ fn test_self_attention_batched() -> Result<()> {
 
 #[test]
 fn test_multi_head_attention_kv_cache() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut attn = MultiHeadAttentionKVCache::new(12, 3, 8, &device)?;
     let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
     let mask = causal_mask(5, &device)?;
@@ -518,7 +518,7 @@ fn test_multi_head_attention_kv_cache() -> Result<()> {
 
 #[test]
 fn test_mlp() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mlp = MLP::new(5, 7, &device)?;
     let x = Tensor::randn(0f32, 1f32, (4, 3, 5), &device)?;
     let out = mlp.forward(&x)?;
@@ -530,7 +530,7 @@ fn test_mlp() -> Result<()> {
 
 #[test]
 fn test_transformer_block() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut block = TransformerBlock::new(12, 3, 16, 8, &device)?;
     let x = Tensor::randn(0f32, 1f32, (1, 5, 12), &device)?;
     let mask = causal_mask(5, &device)?;
@@ -563,7 +563,7 @@ fn test_transformer_block() -> Result<()> {
 
 #[test]
 fn test_llm_hw4() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut model = LLM::new(10, 8, 2, 8, 12, 2, &device)?;
     let tokens = Tensor::from_vec(vec![0u32, 1, 2, 3], (1, 4), &device)?;
 
@@ -589,7 +589,7 @@ fn test_llm_hw4() -> Result<()> {
 
 #[test]
 fn test_llm() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut model = LLM::new(11, 12, 3, 8, 16, 2, &device)?;
     let tokens = Tensor::from_vec(vec![0u32, 1, 2, 3, 4], (1, 5), &device)?;
 
@@ -620,7 +620,7 @@ fn test_llm() -> Result<()> {
 
 #[test]
 fn test_cross_entropy_loss_2d() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let logits_data = vec![2.0f32, 1.0, 0.0, 0.0, 2.0, 1.0];
     let targets = vec![0i32, 2];
     let shape = [2, 3];
@@ -635,7 +635,7 @@ fn test_cross_entropy_loss_2d() -> Result<()> {
 
 #[test]
 fn test_cross_entropy_loss_3d() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let logits = Tensor::randn(0f32, 1f32, (4, 5, 7), &device)?;
     let y_data: Vec<i32> = (0..20).map(|i| i % 7).collect();
     let y = Tensor::from_vec(y_data.clone(), (4, 5), &device)?;
@@ -682,7 +682,7 @@ fn test_dataloader_file() -> Result<()> {
     }
     drop(f);
 
-    let loader = DataLoader::new(&path, 3, 2, &Device::Cpu)?;
+    let loader = DataLoader::new(&path, 3, 2, &default_device()?)?;
     let batches: Vec<_> = loader.collect();
 
     assert_eq!(batches.len(), 3);
@@ -699,7 +699,7 @@ fn test_dataloader_file() -> Result<()> {
 
 #[test]
 fn test_adam() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(6, 3, &device)?;
 
     let params: Vec<Var> = vec![layer.weight.clone()];
@@ -729,7 +729,7 @@ fn test_adam() -> Result<()> {
 
 #[test]
 fn test_adam_zero_grad() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(4, 3, &device)?;
 
     let params: Vec<Var> = vec![layer.weight.clone()];
@@ -759,7 +759,7 @@ fn test_adam_zero_grad() -> Result<()> {
 
 #[test]
 fn test_train_llm() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(4, 5, &device)?;
 
     let params: Vec<Var> = vec![layer.weight.clone()];
@@ -793,7 +793,7 @@ fn test_train_llm() -> Result<()> {
         out_2d.reshape((batch_size, seq_len, 5))
     };
 
-    train_llm(&mut model_fn, loader, &mut opt);
+    let _ = train_llm(&mut model_fn, loader, &mut opt)?;
 
     let w_after = to_vec_f32(&params[0])?;
     let changed = w_after
@@ -808,7 +808,7 @@ fn test_train_llm() -> Result<()> {
 
 #[test]
 fn test_generate() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut call_count = 0usize;
     let next_tokens: Vec<u32> = vec![3, 4];
 
@@ -841,7 +841,7 @@ fn test_generate() -> Result<()> {
 
 #[test]
 fn test_generate_max_tokens() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut model_fn = |tokens: &Tensor, _seq_pos: usize, _use_cache: bool| -> Result<Tensor> {
         let vocab_size = 6;
         let seq_len = tokens.dims()[1];
@@ -890,7 +890,7 @@ mod tiny_stories_eval {
 
 #[test]
 fn test_eval_llm() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let mut model = eval_llm()?;
 
     let eval_tokens = tiny_stories_eval::get_eval_tokens(0, 48);
@@ -991,7 +991,7 @@ fn test_most_common_pair_tie_breaking() {
 
 #[test]
 fn test_linear_kaiming_std_various_sizes() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     for in_f in [16, 64, 256] {
         let layer = Linear::new(in_f, 100, &device)?;
         let w_data = to_vec_f32(&layer.weight)?;
@@ -1010,7 +1010,7 @@ fn test_linear_kaiming_std_various_sizes() -> Result<()> {
 
 #[test]
 fn test_silu_matches_formula() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let x = Tensor::from_vec(vec![-2.0f32, -1.0, 0.0, 1.0, 2.0, 3.0], (2, 3), &device)?;
     let out = silu(&x)?;
     let expected = torch_silu(to_vec_f32(&x)?, x.dims().to_vec());
@@ -1021,7 +1021,7 @@ fn test_silu_matches_formula() -> Result<()> {
 
 #[test]
 fn test_rms_norm_preserves_direction() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let x = Tensor::from_vec(vec![1.0f32, -2.0, 3.0, -4.0], (1, 4), &device)?;
     let out = rms_norm(&x, 1e-5)?;
     let x_vals = to_vec_f32(&x)?;
@@ -1038,7 +1038,7 @@ fn test_rms_norm_preserves_direction() -> Result<()> {
 
 #[test]
 fn test_cross_entropy_loss_hw5_stable() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let logits = Tensor::from_vec(
         vec![1000.0f32, 1001.0, 999.0, 0.0, 0.0, 0.0],
         (2, 3),
@@ -1056,7 +1056,7 @@ fn test_cross_entropy_loss_hw5_stable() -> Result<()> {
 
 #[test]
 fn test_adam_converges_faster_than_random() -> Result<()> {
-    let device = Device::Cpu;
+    let device = default_device()?;
     let layer = Linear::new(4, 3, &device)?;
     let params: Vec<Var> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8)?;

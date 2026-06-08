@@ -79,6 +79,9 @@ use std::fs::File;
 use std::io::{self};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
+use hf_hub::api::sync::Api;
+use tokenizers::Tokenizer;
+
 use candle_core::backprop::GradStore;
 use candle_core::{DType, Device, IndexOp, Result, Tensor, Var, D};
 use candle_nn::ops::{sigmoid, softmax};
@@ -104,7 +107,7 @@ const EPSILON: f32 = 1.0e-5;
 // ============================================================
 
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 /// Split text into a corpus of words (split on whitespace, keep space as prefix).
 /// Returns (corpus, counts) where corpus[i] is a word as a list of strings,
@@ -541,8 +544,8 @@ impl LLM {
 
     pub fn forward(&mut self, tokens: &Tensor, seq_pos: usize, use_cache: bool) -> Result<Tensor> {
         let (_batch, seq_len) = tokens.dims2()?;
-
         let mut res = self.embedding.forward(tokens)?;
+
         let pos = self
             .pos_embeddings
             .narrow(0, seq_pos, seq_len)?
@@ -716,15 +719,17 @@ impl DataLoader {
             return Ok(None);
         }
 
-        // Interpret u16 little-endian bytes to i32 tokens
+        // Interpret u16 little-endian bytes to u32 tokens, since the
+        // cpu/metal backend do not support indexing using i32 Vecs, e.g.
+        // in Embedding.formward()...
         let data_u16: Vec<u16> = data
             .chunks_exact(2)
             .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
             .collect();
 
-        let data_i32: Vec<i32> = data_u16.iter().map(|&x| x as i32).collect();
+        let data_u32: Vec<u32> = data_u16.iter().map(|&x| x as u32).collect();
 
-        let tokens = Tensor::from_vec(data_i32, (self.batch_size, self.seq_len + 1), &self.device)?;
+        let tokens = Tensor::from_vec(data_u32, (self.batch_size, self.seq_len + 1), &self.device)?;
 
         // Shift targets by 1: input is [:, :-1], target is [:, 1:]
         let x = tokens.narrow(1, 0, self.seq_len)?;
@@ -839,6 +844,7 @@ where
 {
     for (x, y) in loader {
         let y_hat = model(&x)?;
+
         let loss = cross_entropy_loss(&y_hat, &y)?;
 
         optimizer.zero_grad();
@@ -896,6 +902,47 @@ pub fn generate(
     Ok(out_tokens)
 }
 
+fn download_dataset() -> Result<PathBuf> {
+    let repo_name = "roneneldan/TinyStories";
+    let dataset_name = "TinyStoriesV2-GPT4-train.txt";
+
+    let api = Api::new().expect("failed to init hf-hub api");
+    let repo = api.dataset(repo_name.to_string());
+    repo.get(dataset_name)
+        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+}
+
+fn download_tokenizer_def() -> Result<PathBuf> {
+    let repo_name = "openai-community/gpt2";
+    let dataset_name = "tokenizer.json";
+
+    let api = Api::new().expect("failed to init hf-hub api");
+    let repo = api.model(repo_name.to_string());
+    repo.get(dataset_name)
+        .map_err(|e| candle_core::Error::Msg(e.to_string()))
+}
+
+fn pretokenize_tinystories(output_path: &Path) -> Result<()> {
+    let filepath = download_tokenizer_def()?;
+    let tokenizer = Tokenizer::from_file(filepath).unwrap();
+
+    let encode_fn = |text: &str| -> Vec<u16> {
+        let encoding = tokenizer.encode(text, false).unwrap();
+        encoding.get_ids().iter().map(|&id| id as u16).collect()
+    };
+
+    let input_path = download_dataset()?;
+
+    pretokenize_data(
+        &encode_fn,
+        &input_path,
+        &output_path,
+        2usize.pow(20),
+        Some(2),
+    );
+    Ok(())
+}
+
 /// Load (or train) an LLM on TinyStories and return the trained model.
 ///
 /// The returned model should achieve < 7.0 cross-entropy loss on the first
@@ -918,12 +965,11 @@ pub fn eval_llm() -> Result<LLM> {
     //
 
     let device = default_device()?;
-    let loader = DataLoader::new(
-        Path::new("TinyStoriesV2-GPT4-train.small.bin"),
-        512,
-        16,
-        &device,
-    )?;
+    let token_path = Path::new("TinyStoriesV2-GPT4-train.small.bin");
+
+    _ = pretokenize_tinystories(&token_path)?;
+
+    let loader = DataLoader::new(&token_path, 512, 16, &device)?;
 
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
@@ -932,8 +978,9 @@ pub fn eval_llm() -> Result<LLM> {
 
     let mut opt = Adam::new(model.parameters(), 1.0e-3, (0.9, 0.95), 1.0e-8)?;
     {
+        // Set the KV Cache to false during training / to true during inference.
         let mut step = |x: &Tensor| model.forward(x, 0, false);
-        train_llm(&mut step, loader, &mut opt)?;
+        let _ = train_llm(&mut step, loader, &mut opt)?;
     }
 
     Ok(model)
