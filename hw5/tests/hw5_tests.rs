@@ -1,6 +1,6 @@
 //! Tests for hw5 — Candle version.
 
-use candle_core::{Device, Result, Tensor};
+use candle_core::{Device, Result, Tensor, Var};
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
@@ -702,7 +702,7 @@ fn test_adam() -> Result<()> {
     let device = Device::Cpu;
     let layer = Linear::new(6, 3, &device)?;
 
-    let params: Vec<Tensor> = vec![layer.weight.clone()];
+    let params: Vec<Var> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 1e-3, (0.9, 0.95), 1e-8)?;
 
     let w_before = to_vec_f32(&params[0])?;
@@ -732,7 +732,7 @@ fn test_adam_zero_grad() -> Result<()> {
     let device = Device::Cpu;
     let layer = Linear::new(4, 3, &device)?;
 
-    let params: Vec<Tensor> = vec![layer.weight.clone()];
+    let params: Vec<Var> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 1e-2, (0.9, 0.999), 1e-8)?;
 
     // Create gradients.
@@ -762,7 +762,7 @@ fn test_train_llm() -> Result<()> {
     let device = Device::Cpu;
     let layer = Linear::new(4, 5, &device)?;
 
-    let params: Vec<Tensor> = vec![layer.weight.clone()];
+    let params: Vec<Var> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params.clone(), 0.01, (0.9, 0.999), 1e-8)?;
 
     let w_before = to_vec_f32(&params[0])?;
@@ -773,7 +773,7 @@ fn test_train_llm() -> Result<()> {
     let y2 = Tensor::from_vec(vec![3i32, 4, 0, 2, 4, 1], (2, 3), &device)?;
     let loader = vec![(x1, y1), (x2, y2)];
 
-    let model_fn = |tokens: &Tensor| -> Result<Tensor> {
+    let mut model_fn = |tokens: &Tensor| -> Result<Tensor> {
         let dims = tokens.dims();
         let batch_size = dims[0];
         let seq_len = dims[1];
@@ -793,7 +793,7 @@ fn test_train_llm() -> Result<()> {
         out_2d.reshape((batch_size, seq_len, 5))
     };
 
-    train_llm(&model_fn, &loader, &mut opt);
+    train_llm(&mut model_fn, loader, &mut opt);
 
     let w_after = to_vec_f32(&params[0])?;
     let changed = w_after
@@ -1058,7 +1058,7 @@ fn test_cross_entropy_loss_hw5_stable() -> Result<()> {
 fn test_adam_converges_faster_than_random() -> Result<()> {
     let device = Device::Cpu;
     let layer = Linear::new(4, 3, &device)?;
-    let params: Vec<Tensor> = vec![layer.weight.clone()];
+    let params: Vec<Var> = vec![layer.weight.clone()];
     let mut opt = Adam::new(params, 0.01, (0.9, 0.999), 1e-8)?;
 
     let x = Tensor::randn(0f32, 1f32, (8, 4), &device)?;

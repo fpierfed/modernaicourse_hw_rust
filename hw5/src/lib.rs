@@ -74,11 +74,13 @@
  * Autoregressively sample tokens using KV cache. Stop at eot_token or max_tokens.
  */
 
+use rand::{distr::weighted::WeightedIndex, distr::Distribution};
 use std::fs::File;
+use std::io::{self};
 use std::io::{BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 
 use candle_core::backprop::GradStore;
-use candle_core::{DType, Device, Result, Tensor, Var, D};
+use candle_core::{DType, Device, IndexOp, Result, Tensor, Var, D};
 use candle_nn::ops::{sigmoid, softmax};
 // use candle_nn::VarBuilder;
 
@@ -295,7 +297,7 @@ pub struct Linear {
     // Stored pre-transposed as [in_dim, out_dim] so forward is a single
     // contiguous matmul with no per-call transpose. The PyTorch checkpoint
     // stores weights as [out_dim, in_dim]; we transpose once at load time.
-    pub weight: Tensor,
+    pub weight: Var,
 }
 
 impl Linear {
@@ -304,27 +306,23 @@ impl Linear {
 
         // We store the weights pre-transposed for performance reasons.
         let weight = Var::from_tensor(&Tensor::randn(0f32, std, (in_dim, out_dim), device)?)?;
-        Ok(Self {
-            weight: weight.as_tensor().clone(),
-        })
+        Ok(Self { weight: weight })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_matmul(&self.weight)
+        x.broadcast_matmul(&self.weight.as_tensor())
     }
 }
 
 #[derive(Clone, Debug)]
 pub struct Embedding {
-    pub weight: Tensor,
+    pub weight: Var,
 }
 
 impl Embedding {
     pub fn new(num_tokens: usize, dim: usize, device: &Device) -> Result<Self> {
         let weight = Var::from_tensor(&Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?)?;
-        Ok(Self {
-            weight: weight.as_tensor().clone(),
-        })
+        Ok(Self { weight })
     }
 
     pub fn forward(&self, indices: &Tensor) -> Result<Tensor> {
@@ -509,7 +507,7 @@ impl TransformerBlock {
 #[derive(Clone, Debug)]
 pub struct LLM {
     pub embedding: Embedding,
-    pub pos_embeddings: Tensor,
+    pub pos_embeddings: Var,
     pub layers: Vec<TransformerBlock>,
     pub output: Linear,
     pub mask: Tensor,
@@ -527,7 +525,12 @@ impl LLM {
     ) -> Result<Self> {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
-            pos_embeddings: Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?,
+            pos_embeddings: Var::from_tensor(&Tensor::randn(
+                0f32,
+                1.0f32,
+                (max_seq, dim),
+                device,
+            )?)?,
             layers: (0..num_layers)
                 .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
                 .collect::<Result<Vec<_>>>()?,
@@ -555,6 +558,25 @@ impl LLM {
         }
         let normalized_res = rms_norm(&res, EPSILON)?;
         self.output.forward(&normalized_res)
+    }
+    pub fn parameters(&self) -> Vec<Var> {
+        let mut p = vec![self.embedding.weight.clone(), self.pos_embeddings.clone()];
+        for l in &self.layers {
+            p.extend(
+                [
+                    &l.attn.wq.weight,
+                    &l.attn.wk.weight,
+                    &l.attn.wv.weight,
+                    &l.attn.wp.weight,
+                    &l.mlp.w1.weight,
+                    &l.mlp.w2.weight,
+                ]
+                .into_iter()
+                .cloned(),
+            );
+        }
+        p.push(self.output.weight.clone());
+        p
     }
 }
 
@@ -738,23 +760,19 @@ pub struct Adam {
 }
 
 impl Adam {
-    fn init_from_params(params: &[Tensor]) -> Result<Vec<Tensor>> {
+    fn init_from_params(params: &[Var]) -> Result<Vec<Tensor>> {
         params
             .iter()
-            .map(|p| p.zeros_like())
+            .map(|p| p.as_tensor().zeros_like())
             .collect::<Result<Vec<Tensor>>>()
     }
 
-    pub fn new(params: Vec<Tensor>, lr: f32, betas: (f32, f32), eps: f32) -> Result<Self> {
+    pub fn new(params: Vec<Var>, lr: f32, betas: (f32, f32), eps: f32) -> Result<Self> {
         let u = Self::init_from_params(&params)?;
         let v = Self::init_from_params(&params)?;
-        let param_vars: Vec<Var> = params
-            .iter()
-            .map(|p| Var::from_tensor(p).unwrap())
-            .collect::<Vec<Var>>();
 
         Ok(Self {
-            params: param_vars,
+            params,
             lr,
             beta1: betas.0,
             beta2: betas.1,
@@ -775,25 +793,23 @@ impl Adam {
         }
         let grads = grads.as_ref().unwrap();
 
-        for (i, p) in self.params.iter_mut().enumerate() {
+        for (i, p) in self.params.iter().enumerate() {
             let grad = match grads.get(p) {
                 Some(g) => g,
                 None => continue,
             };
 
-            self.u[i] =
-                ((self.u[i].clone() * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * grad)?;
-            self.v[i] = ((self.v[i].clone() * (self.beta2 as f64))?
-                + (1.0 - self.beta2 as f64) * grad * grad)?;
+            self.u[i] = ((&self.u[i] * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * grad)?;
+            self.v[i] =
+                ((&self.v[i] * (self.beta2 as f64))? + (1.0 - self.beta2 as f64) * grad * grad)?;
 
-            let u_hat = (self.u[i].clone() / (1.0 - self.beta1.powi(self.t as i32) as f64))?;
-            let v_hat = (self.v[i].clone() / (1.0 - self.beta2.powi(self.t as i32) as f64))?;
+            let u_hat = (&self.u[i] / (1.0 - self.beta1.powi(self.t as i32) as f64))?;
+            let v_hat = (&self.v[i] / (1.0 - self.beta2.powi(self.t as i32) as f64))?;
 
-            let updated_p = (p.clone().as_tensor()
-                - ((u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?
-                .contiguous()?;
+            let updated_p = (p.as_tensor()
+                - ((u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?;
 
-            p.slice_set(&updated_p, 0, 0)?;
+            p.set(&updated_p)?;
         }
         self.t += 1;
         Ok(())
@@ -816,26 +832,14 @@ impl Adam {
 }
 
 /// Train the LLM for one pass over the data loader.
-pub fn train_llm(
-    model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    loader: &[(Tensor, Tensor)],
-    optimizer: &mut Adam,
-) {
-    if let Ok(()) = train_llm_helper(model, loader, optimizer) {
-        println!("Training complete");
-    } else {
-        println!("Training aborted due to error");
-    }
-}
-
-pub fn train_llm_helper(
-    model: &dyn Fn(&Tensor) -> Result<Tensor>,
-    loader: &[(Tensor, Tensor)],
-    optimizer: &mut Adam,
-) -> Result<()> {
-    for (x, y) in loader.iter() {
-        let y_hat = model(x)?;
-        let loss = cross_entropy_loss(&y_hat, y)?;
+pub fn train_llm<F, I>(model: &mut F, loader: I, optimizer: &mut Adam) -> Result<()>
+where
+    F: FnMut(&Tensor) -> Result<Tensor>,
+    I: IntoIterator<Item = (Tensor, Tensor)>,
+{
+    for (x, y) in loader {
+        let y_hat = model(&x)?;
+        let loss = cross_entropy_loss(&y_hat, &y)?;
 
         optimizer.zero_grad();
         let grads = loss.backward();
@@ -848,15 +852,48 @@ pub fn train_llm_helper(
 
 /// Generate tokens autoregressively with temperature sampling and KV cache.
 pub fn generate(
-    _model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
-    _prompt_tokens: &[u32],
-    _decode_fn: &dyn Fn(&[u32]) -> String,
-    _stop_token: u32,
-    _temp: f32,
-    _max_tokens: usize,
-    _verbose: bool,
+    model: &mut dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>,
+    prompt_tokens: &[u32],
+    decode_fn: &dyn Fn(&[u32]) -> String,
+    stop_token: u32,
+    temp: f32,
+    max_tokens: usize,
+    verbose: bool,
 ) -> Result<Vec<u32>> {
-    todo!()
+    let mut out_tokens: Vec<u32> = Vec::new();
+    let num_tokens = prompt_tokens.len();
+    let device: Device = default_device()?;
+
+    let in_tokens = Tensor::from_vec(prompt_tokens.into(), (1, num_tokens), &device)?;
+    // model(tensor: &Tensor, seq_pos: usize, use_kv_cache: bool)
+    let mut res = model(&in_tokens, 0, true)?;
+
+    for _ in 0..max_tokens {
+        let p: Vec<f32> =
+            softmax(&(res.i((0, res.dim(1)? - 1))? / temp as f64)?, D::Minus1)?.to_vec1()?;
+        // candle does not have multimodal so we do it by hand.
+        let dist = WeightedIndex::new(&p).unwrap();
+        let next_token = dist.sample(&mut rand::rng()) as u32;
+        out_tokens.push(next_token);
+
+        if verbose {
+            print!("{}", decode_fn(&[next_token]));
+            io::stdout().flush().unwrap();
+        }
+
+        if next_token == stop_token {
+            break;
+        }
+
+        // And back again!
+        let seq_pos = num_tokens + out_tokens.len();
+        res = model(
+            &Tensor::from_vec(vec![next_token], (1, 1), &device)?,
+            seq_pos,
+            true,
+        )?;
+    }
+    Ok(out_tokens)
 }
 
 /// Load (or train) an LLM on TinyStories and return the trained model.
@@ -865,5 +902,39 @@ pub fn generate(
 /// 48 tokens of TinyStories (tokenized with GPT-2), and support KV-cached
 /// inference.
 pub fn eval_llm() -> Result<LLM> {
-    todo!()
+    //
+    // This is the rust equivalent of:
+    //
+    // tokenizer = tiktoken.get_encoding("gpt2")
+    // loader = DataLoader("TinyStoriesV2-GPT4-train.small.bin", 512, 16, device=dev)
+    // model = LLM(num_tokens=(tokenizer.n_vocab//256+1)*256,
+    //             dim=256,
+    //             n_heads=8,
+    //             max_seq_len=512,
+    //             ffn_dim=512,
+    //             num_layers=4).to(dev)
+    // opt = Adam(model.parameters(), lr=1e-3, betas=(0.9, 0.95))
+    // train_llm(model, loader, opt)
+    //
+
+    let device = default_device()?;
+    let loader = DataLoader::new(
+        Path::new("TinyStoriesV2-GPT4-train.small.bin"),
+        512,
+        16,
+        &device,
+    )?;
+
+    // GPT-2's vocab size is 50257, so:
+    // - 50257 // 256 = 196
+    // - (196 + 1) * 256 = 50432
+    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, &device)?;
+
+    let mut opt = Adam::new(model.parameters(), 1.0e-3, (0.9, 0.95), 1.0e-8)?;
+    {
+        let mut step = |x: &Tensor| model.forward(x, 0, false);
+        train_llm(&mut step, loader, &mut opt)?;
+    }
+
+    Ok(model)
 }
