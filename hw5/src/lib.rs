@@ -190,6 +190,7 @@ pub fn most_common_pair(corpus: &[Vec<String>], counts: &[usize]) -> (String, St
         }
     }
 
+    assert!(!order.is_empty(), "no adjacent pairs found in corpus");
     let mut first_most_common: (&String, &String) = order[0];
     let mut max_count: usize = counter[&first_most_common];
 
@@ -609,9 +610,10 @@ pub fn cross_entropy_loss(logits: &Tensor, targets: &Tensor) -> Result<Tensor> {
     // where for convenience we have set d=logits.shape[-1]
     // and we then flattren targets/y
     // One difference is that candle requires us to cast targets to u32
+    // Changed DataLoader to that effect.
     // to use in the gather operation below.
     let logits = logits.reshape(((), d))?;
-    let targets = targets.flatten_all()?.to_dtype(DType::U32)?;
+    let targets = targets.flatten_all()?;
 
     // Here PyTorch would allow us to simply do a
     // logits[torch.arange(len(y)), y]
@@ -726,12 +728,10 @@ impl DataLoader {
         // Interpret u16 little-endian bytes to u32 tokens, since the
         // cpu/metal backend do not support indexing using i32 Vecs, e.g.
         // in Embedding.formward()...
-        let data_u16: Vec<u16> = data
+        let data_u32: Vec<u32> = data
             .chunks_exact(2)
-            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]))
+            .map(|chunk| u16::from_le_bytes([chunk[0], chunk[1]]) as u32)
             .collect();
-
-        let data_u32: Vec<u32> = data_u16.iter().map(|&x| x as u32).collect();
 
         let tokens = Tensor::from_vec(data_u32, (self.batch_size, self.seq_len + 1), &self.device)?;
 
@@ -798,7 +798,7 @@ impl Adam {
 
     fn step_helper(&mut self, grads: &Result<GradStore>) -> Result<()> {
         if grads.is_err() {
-            panic!("Gradiens are not correctly computed!");
+            panic!("Gradients are not correctly computed!");
         }
         let grads = grads.as_ref().unwrap();
 
@@ -817,7 +817,6 @@ impl Adam {
 
             let updated_p = (p.as_tensor()
                 - ((u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?;
-
             p.set(&updated_p)?;
         }
         self.t += 1;
@@ -851,7 +850,9 @@ where
 
         let loss = cross_entropy_loss(&y_hat, &y)?;
 
-        optimizer.zero_grad();
+        // In reality candle's gradients do not accumulate so this is not
+        // needed as it is iin PyTorch...
+        // optimizer.zero_grad();
         let grads = loss.backward();
         optimizer.step(&grads);
 
@@ -882,7 +883,7 @@ pub fn generate(
         let p: Vec<f32> =
             softmax(&(res.i((0, res.dim(1)? - 1))? / temp as f64)?, D::Minus1)?.to_vec1()?;
         // candle does not have multimodal so we do it by hand.
-        let dist = WeightedIndex::new(&p).unwrap();
+        let dist = WeightedIndex::new(&p).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let next_token = dist.sample(&mut rand::rng()) as u32;
         out_tokens.push(next_token);
 
