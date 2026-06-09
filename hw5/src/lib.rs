@@ -796,28 +796,79 @@ impl Adam {
         self.step_helper(grads).expect("Error in Adam step");
     }
 
+    pub fn step_accumulated(&mut self, grads_list: &[GradStore]) -> Result<()> {
+        for (i, p) in self.params.iter().enumerate() {
+            // Build the grad for p starting from its partials.
+            let mut total_grad: Option<Tensor> = None;
+            for gs in grads_list {
+                if let Some(g) = gs.get(p) {
+                    total_grad = match total_grad {
+                        Some(sum) => Some((sum + g)?),
+                        None => Some(g.clone()),
+                    };
+                }
+            }
+            let grad = match total_grad {
+                Some(g) => g.detach(),
+                None => continue,
+            };
+            // Same as step_helper fro now on.
+            let p_tensor = p.as_tensor().detach();
+
+            let u_next = ((&self.u[i] * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * &grad)?;
+            let v_next = ((&self.v[i] * (self.beta2 as f64))?
+                + (1.0 - self.beta2 as f64) * (&grad * &grad)?)?;
+
+            self.u[i] = u_next.detach();
+            self.v[i] = v_next.detach();
+
+            let u_hat = (&self.u[i] / (1.0 - self.beta1.powi(self.t as i32) as f64))?;
+            let v_hat = (&self.v[i] / (1.0 - self.beta2.powi(self.t as i32) as f64))?;
+
+            let updated_p =
+                (&p_tensor - ((&u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?;
+            p.set(&updated_p.detach())?;
+        }
+        self.t += 1;
+        Ok(())
+    }
+
     fn step_helper(&mut self, grads: &Result<GradStore>) -> Result<()> {
         if grads.is_err() {
             panic!("Gradients are not correctly computed!");
         }
         let grads = grads.as_ref().unwrap();
-
+        // Because `updated_p` is computed directly from `p.as_tensor()` and `grad` within the
+        // tracked autograd graph, it retains references to the computation graph of the step. By
+        // calling `p.set(&updated_p)` without detaching it, the parameter `p` holds a
+        // reference to the entire computation graph of that training step. In the next step, the
+        // forward pass starts from these weights, chaining the new step's graph to the previous
+        // one. This prevents any previous step's graph from being deallocated, causing memory usage
+        // to grow indefinitely step-by-step. Hence the swapping. Hence here the changes:
         for (i, p) in self.params.iter().enumerate() {
             let grad = match grads.get(p) {
-                Some(g) => g,
+                // Change 1: g.detach()
+                Some(g) => g.detach(),
                 None => continue,
             };
+            // Change 2. p.as_tensor().detach()
+            let p_tensor = p.as_tensor().detach();
 
-            self.u[i] = ((&self.u[i] * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * grad)?;
-            self.v[i] =
-                ((&self.v[i] * (self.beta2 as f64))? + (1.0 - self.beta2 as f64) * grad * grad)?;
+            let u_next = ((&self.u[i] * (self.beta1 as f64))? + (1.0 - self.beta1 as f64) * &grad)?;
+            let v_next = ((&self.v[i] * (self.beta2 as f64))?
+                + (1.0 - self.beta2 as f64) * (&grad * &grad)?)?;
+
+            // Change 3. u_next and v_next.
+            self.u[i] = u_next.detach();
+            self.v[i] = v_next.detach();
 
             let u_hat = (&self.u[i] / (1.0 - self.beta1.powi(self.t as i32) as f64))?;
             let v_hat = (&self.v[i] / (1.0 - self.beta2.powi(self.t as i32) as f64))?;
 
-            let updated_p = (p.as_tensor()
-                - ((u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?;
-            p.set(&updated_p)?;
+            let updated_p =
+                (&p_tensor - ((&u_hat * (self.lr as f64))? / (v_hat.sqrt()? + self.eps as f64)?)?)?;
+            // Finally, detach updated_p
+            p.set(&updated_p.detach())?;
         }
         self.t += 1;
         Ok(())
@@ -840,23 +891,41 @@ impl Adam {
 }
 
 /// Train the LLM for one pass over the data loader.
-pub fn train_llm<F, I>(model: &mut F, loader: I, optimizer: &mut Adam) -> Result<()>
+pub fn train_llm<F, I>(
+    model: &mut F,
+    loader: I,
+    optimizer: &mut Adam,
+    batch_size: usize,
+) -> Result<()>
 where
     F: FnMut(&Tensor) -> Result<Tensor>,
     I: IntoIterator<Item = (Tensor, Tensor)>,
 {
+    // The vocabulary size is 50432, batch size is 16, and sequence length is 512. The final logits
+    // tensor shape is [16, 512, 50432], containing 413 million elements (1.65 GB). Candle's
+    // log_sum_exp is Composite: Unlike PyTorch (which uses a single fused C++ kernel), Candle's
+    // log_sum_exp is a wrapper calling multiple basic operations and allocating intermediate
+    // tensors which blows up RAM usage. We chunk the data in the training loop and pass partial
+    // gradients to Adam.
     for (x, y) in loader {
-        let y_hat = model(&x)?;
+        // Chunk
+        let chunk_size = 2;
+        let num_chunks = batch_size / chunk_size;
+        let mut grads_list = Vec::new();
 
-        let loss = cross_entropy_loss(&y_hat, &y)?;
+        for c in 0..num_chunks {
+            let start_idx = c * chunk_size;
+            let x_chunk = x.narrow(0, start_idx, chunk_size)?;
+            let y_chunk = y.narrow(0, start_idx, chunk_size)?;
 
-        // In reality candle's gradients do not accumulate so this is not
-        // needed as it is iin PyTorch...
-        // optimizer.zero_grad();
-        let grads = loss.backward();
-        optimizer.step(&grads);
+            let y_hat_chunk = model(&x_chunk)?;
+            let loss_chunk = cross_entropy_loss(&y_hat_chunk, &y_chunk)?;
+            let loss_scaled = (loss_chunk / num_chunks as f64)?;
 
-        println!("Tokens: {}: loss: {}", x.dim(D::Minus1)?, loss);
+            grads_list.push(loss_scaled.backward()?);
+        }
+
+        optimizer.step_accumulated(&grads_list)?;
     }
     Ok(())
 }
@@ -907,7 +976,7 @@ pub fn generate(
     Ok(out_tokens)
 }
 
-fn download_dataset() -> Result<PathBuf> {
+pub fn download_dataset() -> Result<PathBuf> {
     let repo_name = "roneneldan/TinyStories";
     let dataset_name = "TinyStoriesV2-GPT4-train.txt";
 
@@ -917,7 +986,7 @@ fn download_dataset() -> Result<PathBuf> {
         .map_err(|e| candle_core::Error::Msg(e.to_string()))
 }
 
-fn download_tokenizer_def() -> Result<PathBuf> {
+pub fn download_tokenizer_def() -> Result<PathBuf> {
     let repo_name = "openai-community/gpt2";
     let dataset_name = "tokenizer.json";
 
@@ -927,7 +996,11 @@ fn download_tokenizer_def() -> Result<PathBuf> {
         .map_err(|e| candle_core::Error::Msg(e.to_string()))
 }
 
-fn pretokenize_tinystories(output_path: &Path) -> Result<()> {
+pub fn pretokenize_tinystories(output_path: &Path) -> Result<()> {
+    if output_path.exists() {
+        return Ok(());
+    }
+
     let filepath = download_tokenizer_def()?;
     let tokenizer = Tokenizer::from_file(filepath).unwrap();
 
@@ -974,6 +1047,7 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
     pretokenize_tinystories(token_path)?;
 
     let loader = DataLoader::new(token_path, 512, 16, device)?;
+    let batch_size = loader.batch_size;
 
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
@@ -984,7 +1058,7 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
     {
         // Set the KV Cache to false during training / to true during inference.
         let mut step = |x: &Tensor| model.forward(x, 0, false);
-        train_llm(&mut step, loader, &mut opt)?;
+        train_llm(&mut step, loader, &mut opt, batch_size)?;
     }
 
     Ok(model)
