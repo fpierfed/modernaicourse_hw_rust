@@ -313,11 +313,11 @@ impl Linear {
 
         // We store the weights pre-transposed for performance reasons.
         let weight = Var::from_tensor(&Tensor::randn(0f32, std, (in_dim, out_dim), device)?)?;
-        Ok(Self { weight: weight })
+        Ok(Self { weight })
     }
 
     pub fn forward(&self, x: &Tensor) -> Result<Tensor> {
-        x.broadcast_matmul(&self.weight.as_tensor())
+        x.broadcast_matmul(self.weight.as_tensor())
     }
 }
 
@@ -874,7 +874,7 @@ pub fn generate(
     let mut out_tokens: Vec<u32> = Vec::new();
     let num_tokens = prompt_tokens.len();
 
-    let in_tokens = Tensor::from_vec(prompt_tokens.into(), (1, num_tokens), &device)?;
+    let in_tokens = Tensor::from_vec(prompt_tokens.into(), (1, num_tokens), device)?;
     // model(tensor: &Tensor, seq_pos: usize, use_kv_cache: bool)
     let mut res = model(&in_tokens, 0, true)?;
 
@@ -898,7 +898,7 @@ pub fn generate(
         // And back again!
         let seq_pos = num_tokens + out_tokens.len();
         res = model(
-            &Tensor::from_vec(vec![next_token], (1, 1), &device)?,
+            &Tensor::from_vec(vec![next_token], (1, 1), device)?,
             seq_pos,
             true,
         )?;
@@ -940,7 +940,7 @@ fn pretokenize_tinystories(output_path: &Path) -> Result<()> {
     pretokenize_data(
         &encode_fn,
         &input_path,
-        &output_path,
+        output_path,
         2usize.pow(20),
         Some(2),
     );
@@ -970,20 +970,20 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
 
     let token_path = Path::new("TinyStoriesV2-GPT4-train.small.bin");
 
-    _ = pretokenize_tinystories(&token_path)?;
+    pretokenize_tinystories(token_path)?;
 
-    let loader = DataLoader::new(&token_path, 512, 16, &device)?;
+    let loader = DataLoader::new(token_path, 512, 16, device)?;
 
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
     // - (196 + 1) * 256 = 50432
-    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, &device)?;
+    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, device)?;
 
     let mut opt = Adam::new(model.parameters(), 1.0e-3, (0.9, 0.95), 1.0e-8)?;
     {
         // Set the KV Cache to false during training / to true during inference.
         let mut step = |x: &Tensor| model.forward(x, 0, false);
-        let _ = train_llm(&mut step, loader, &mut opt)?;
+        train_llm(&mut step, loader, &mut opt)?;
     }
 
     Ok(model)
