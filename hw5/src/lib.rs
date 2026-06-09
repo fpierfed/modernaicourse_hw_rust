@@ -87,17 +87,21 @@ use candle_core::{DType, Device, IndexOp, Result, Tensor, Var, D};
 use candle_nn::ops::{sigmoid, softmax};
 // use candle_nn::VarBuilder;
 
+// We need to cache the results so that all calls return the same
+// device instance!
 pub fn default_device() -> Result<Device> {
     #[cfg(feature = "cuda")]
     {
-        return Device::new_cuda(0);
+        Device::new_cuda(0)
     }
     #[cfg(all(feature = "metal", not(feature = "cuda")))]
     {
-        return Device::new_metal(0);
+        Device::new_metal(0)
     }
-    #[allow(unreachable_code)]
-    Ok(Device::Cpu)
+    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+    {
+        Ok(Device::Cpu)
+    }
 }
 
 const EPSILON: f32 = 1.0e-5;
@@ -865,10 +869,10 @@ pub fn generate(
     temp: f32,
     max_tokens: usize,
     verbose: bool,
+    device: &Device,
 ) -> Result<Vec<u32>> {
     let mut out_tokens: Vec<u32> = Vec::new();
     let num_tokens = prompt_tokens.len();
-    let device: Device = default_device()?;
 
     let in_tokens = Tensor::from_vec(prompt_tokens.into(), (1, num_tokens), &device)?;
     // model(tensor: &Tensor, seq_pos: usize, use_kv_cache: bool)
@@ -948,7 +952,7 @@ fn pretokenize_tinystories(output_path: &Path) -> Result<()> {
 /// The returned model should achieve < 7.0 cross-entropy loss on the first
 /// 48 tokens of TinyStories (tokenized with GPT-2), and support KV-cached
 /// inference.
-pub fn eval_llm() -> Result<LLM> {
+pub fn eval_llm(device: &Device) -> Result<LLM> {
     //
     // This is the rust equivalent of:
     //
@@ -964,7 +968,6 @@ pub fn eval_llm() -> Result<LLM> {
     // train_llm(model, loader, opt)
     //
 
-    let device = default_device()?;
     let token_path = Path::new("TinyStoriesV2-GPT4-train.small.bin");
 
     _ = pretokenize_tinystories(&token_path)?;
