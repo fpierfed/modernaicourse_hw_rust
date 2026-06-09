@@ -907,6 +907,7 @@ mod tiny_stories_eval {
 }
 
 #[test]
+#[ignore] // it is too expensive, run with cargo test -- --ignored
 fn test_eval_llm() -> Result<()> {
     let device = default_device()?;
     let mut model = eval_llm(&device)?;
