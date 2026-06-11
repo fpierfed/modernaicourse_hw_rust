@@ -297,7 +297,7 @@ pub fn build_causal_mask(n: usize, device: &Device) -> Result<Tensor> {
         let (i, chunk) = row;
         chunk[i + 1..].fill(f32::NEG_INFINITY);
     }
-    Tensor::from_vec(data, (n, n), device)
+    Tensor::from_vec(data, (n, n), device)?.to_dtype(DType::BF16)
 }
 
 #[derive(Clone, Debug)]
@@ -313,7 +313,9 @@ impl Linear {
         let std = (2.0 / in_dim as f32).sqrt();
 
         // We store the weights pre-transposed for performance reasons.
-        let weight = Var::from_tensor(&Tensor::randn(0f32, std, (in_dim, out_dim), device)?)?;
+        let weight = Var::from_tensor(
+            &Tensor::randn(0f32, std, (in_dim, out_dim), device)?.to_dtype(DType::BF16)?,
+        )?;
         Ok(Self { weight })
     }
 
@@ -329,7 +331,9 @@ pub struct Embedding {
 
 impl Embedding {
     pub fn new(num_tokens: usize, dim: usize, device: &Device) -> Result<Self> {
-        let weight = Var::from_tensor(&Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?)?;
+        let weight = Var::from_tensor(
+            &Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?.to_dtype(DType::BF16)?,
+        )?;
         Ok(Self { weight })
     }
 
@@ -413,8 +417,8 @@ impl MultiHeadAttentionKVCache {
             wp: Linear::new(dim, dim, device)?,
             n_heads,
             max_cache_size: max_cache,
-            k_cache: Tensor::zeros((1, max_cache, dim), DType::F32, device)?,
-            v_cache: Tensor::zeros((1, max_cache, dim), DType::F32, device)?,
+            k_cache: Tensor::zeros((1, max_cache, dim), DType::BF16, device)?,
+            v_cache: Tensor::zeros((1, max_cache, dim), DType::BF16, device)?,
         })
     }
 
@@ -533,12 +537,9 @@ impl LLM {
     ) -> Result<Self> {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
-            pos_embeddings: Var::from_tensor(&Tensor::randn(
-                0f32,
-                1.0f32,
-                (max_seq, dim),
-                device,
-            )?)?,
+            pos_embeddings: Var::from_tensor(
+                &Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?.to_dtype(DType::BF16)?,
+            )?,
             layers: (0..num_layers)
                 .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
                 .collect::<Result<Vec<_>>>()?,
@@ -891,12 +892,7 @@ impl Adam {
 }
 
 /// Train the LLM for one pass over the data loader.
-pub fn train_llm<F, I>(
-    model: &mut F,
-    loader: I,
-    optimizer: &mut Adam,
-    batch_size: usize,
-) -> Result<()>
+pub fn train_llm<F, I>(model: &mut F, loader: I, optimizer: &mut Adam) -> Result<()>
 where
     F: FnMut(&Tensor) -> Result<Tensor>,
     I: IntoIterator<Item = (Tensor, Tensor)>,
@@ -908,24 +904,10 @@ where
     // tensors which blows up RAM usage. We chunk the data in the training loop and pass partial
     // gradients to Adam.
     for (x, y) in loader {
-        // Chunk
-        let chunk_size = 2;
-        let num_chunks = batch_size / chunk_size;
-        let mut grads_list = Vec::new();
-
-        for c in 0..num_chunks {
-            let start_idx = c * chunk_size;
-            let x_chunk = x.narrow(0, start_idx, chunk_size)?;
-            let y_chunk = y.narrow(0, start_idx, chunk_size)?;
-
-            let y_hat_chunk = model(&x_chunk)?;
-            let loss_chunk = cross_entropy_loss(&y_hat_chunk, &y_chunk)?;
-            let loss_scaled = (loss_chunk / num_chunks as f64)?;
-
-            grads_list.push(loss_scaled.backward()?);
-        }
-
-        optimizer.step_accumulated(&grads_list)?;
+        let y_hat = model(&x)?;
+        let loss = cross_entropy_loss(&y_hat, &y)?;
+        let grads = loss.backward();
+        optimizer.step(&grads);
     }
     Ok(())
 }
@@ -968,7 +950,7 @@ pub fn generate(
         // And back again!
         let seq_pos = num_tokens + out_tokens.len();
         res = model(
-            &Tensor::from_vec(vec![next_token], (1, 1), device)?,
+            &Tensor::from_vec(vec![next_token], (1, 1), device)?.to_dtype(DType::BF16)?,
             seq_pos,
             true,
         )?;
@@ -1047,7 +1029,6 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
     pretokenize_tinystories(token_path)?;
 
     let loader = DataLoader::new(token_path, 512, 16, device)?;
-    let batch_size = loader.batch_size;
 
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
@@ -1058,7 +1039,7 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
     {
         // Set the KV Cache to false during training / to true during inference.
         let mut step = |x: &Tensor| model.forward(x, 0, false);
-        train_llm(&mut step, loader, &mut opt, batch_size)?;
+        train_llm(&mut step, loader, &mut opt)?;
     }
 
     Ok(model)

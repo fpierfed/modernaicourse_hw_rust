@@ -8,7 +8,8 @@ fn main() -> Result<()> {
 
     pretokenize_tinystories(token_path)?;
 
-    let loader = DataLoader::new(token_path, 512, 8, &device)?;
+    let batch_size: usize = 16;
+    let loader = DataLoader::new(token_path, 512, batch_size, &device)?;
 
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
