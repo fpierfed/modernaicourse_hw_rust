@@ -1,4 +1,4 @@
-use candle_core::{Device, Result, Tensor};
+use candle_core::{DType, Device, Result, Tensor};
 use hw5::*;
 use std::path::Path;
 
@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
     // - (196 + 1) * 256 = 50432
-    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, &device)?;
+    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, &device)?.to_dtype(DType::BF16)?;
 
     let mut opt = Adam::new(model.parameters(), 1.0e-3, (0.9, 0.95), 1.0e-8)?;
     {

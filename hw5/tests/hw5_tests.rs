@@ -793,7 +793,7 @@ fn test_train_llm() -> Result<()> {
         out_2d.reshape((batch_size, seq_len, 5))
     };
 
-    let _ = train_llm(&mut model_fn, loader, &mut opt, 2)?;
+    let _ = train_llm(&mut model_fn, loader, &mut opt)?;
 
     let w_after = to_vec_f32(&params[0])?;
     let changed = w_after

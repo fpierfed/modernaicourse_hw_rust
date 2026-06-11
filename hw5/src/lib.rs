@@ -297,7 +297,7 @@ pub fn build_causal_mask(n: usize, device: &Device) -> Result<Tensor> {
         let (i, chunk) = row;
         chunk[i + 1..].fill(f32::NEG_INFINITY);
     }
-    Tensor::from_vec(data, (n, n), device)?.to_dtype(DType::BF16)
+    Tensor::from_vec(data, (n, n), device)
 }
 
 #[derive(Clone, Debug)]
@@ -312,10 +312,12 @@ impl Linear {
     pub fn new(in_dim: usize, out_dim: usize, device: &Device) -> Result<Self> {
         let std = (2.0 / in_dim as f32).sqrt();
 
-        // We store the weights pre-transposed for performance reasons.
-        let weight = Var::from_tensor(
-            &Tensor::randn(0f32, std, (in_dim, out_dim), device)?.to_dtype(DType::BF16)?,
-        )?;
+        let weight = Var::from_tensor(&Tensor::randn(0f32, std, (in_dim, out_dim), device)?)?;
+        Ok(Self { weight })
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        let weight = Var::from_tensor(&self.weight.to_dtype(dtype)?)?;
         Ok(Self { weight })
     }
 
@@ -331,9 +333,12 @@ pub struct Embedding {
 
 impl Embedding {
     pub fn new(num_tokens: usize, dim: usize, device: &Device) -> Result<Self> {
-        let weight = Var::from_tensor(
-            &Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?.to_dtype(DType::BF16)?,
-        )?;
+        let weight = Var::from_tensor(&Tensor::randn(0f32, 1.0f32, (num_tokens, dim), device)?)?;
+        Ok(Self { weight })
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        let weight = Var::from_tensor(&self.weight.to_dtype(dtype)?)?;
         Ok(Self { weight })
     }
 
@@ -417,8 +422,21 @@ impl MultiHeadAttentionKVCache {
             wp: Linear::new(dim, dim, device)?,
             n_heads,
             max_cache_size: max_cache,
-            k_cache: Tensor::zeros((1, max_cache, dim), DType::BF16, device)?,
-            v_cache: Tensor::zeros((1, max_cache, dim), DType::BF16, device)?,
+            k_cache: Tensor::zeros((1, max_cache, dim), DType::F32, device)?,
+            v_cache: Tensor::zeros((1, max_cache, dim), DType::F32, device)?,
+        })
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        Ok(Self {
+            wq: self.wq.to_dtype(dtype)?,
+            wk: self.wk.to_dtype(dtype)?,
+            wv: self.wv.to_dtype(dtype)?,
+            wp: self.wp.to_dtype(dtype)?,
+            n_heads: self.n_heads,
+            max_cache_size: self.max_cache_size,
+            k_cache: self.k_cache.to_dtype(dtype)?,
+            v_cache: self.v_cache.to_dtype(dtype)?,
         })
     }
 
@@ -478,6 +496,12 @@ impl MLP {
         let up = self.w1.forward(x)?;
         self.w2.forward(&silu(&up)?)
     }
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        Ok(Self {
+            w1: self.w1.to_dtype(dtype)?,
+            w2: self.w2.to_dtype(dtype)?,
+        })
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -497,6 +521,13 @@ impl TransformerBlock {
         Ok(Self {
             attn: MultiHeadAttentionKVCache::new(dim, n_heads, max_seq, device)?,
             mlp: MLP::new(dim, ffn_dim, device)?,
+        })
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        Ok(Self {
+            attn: self.attn.to_dtype(dtype)?,
+            mlp: self.mlp.to_dtype(dtype)?,
         })
     }
 
@@ -538,13 +569,27 @@ impl LLM {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
             pos_embeddings: Var::from_tensor(
-                &Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?.to_dtype(DType::BF16)?,
+                &Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?,
             )?,
             layers: (0..num_layers)
                 .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
                 .collect::<Result<Vec<_>>>()?,
             output: Linear::new(dim, num_tokens, device)?,
             mask: build_causal_mask(max_seq, device)?,
+        })
+    }
+
+    pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
+        let layers = self.layers
+            .iter()
+            .map(|l| l.to_dtype(dtype))
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            embedding: self.embedding.to_dtype(dtype)?,
+            pos_embeddings: Var::from_tensor(&self.pos_embeddings.to_dtype(dtype)?)?,
+            layers,
+            output: self.output.to_dtype(dtype)?,
+            mask: self.mask.to_dtype(dtype)?,
         })
     }
 
@@ -931,8 +976,9 @@ pub fn generate(
     let mut res = model(&in_tokens, 0, true)?;
 
     for _ in 0..max_tokens {
-        let p: Vec<f32> =
-            softmax(&(res.i((0, res.dim(1)? - 1))? / temp as f64)?, D::Minus1)?.to_vec1()?;
+        let p: Vec<f32> = softmax(&(res.i((0, res.dim(1)? - 1))? / temp as f64)?, D::Minus1)?
+            .to_dtype(DType::F32)?
+            .to_vec1()?;
         // candle does not have multimodal so we do it by hand.
         let dist = WeightedIndex::new(&p).map_err(|e| candle_core::Error::Msg(e.to_string()))?;
         let next_token = dist.sample(&mut rand::rng()) as u32;
@@ -950,7 +996,7 @@ pub fn generate(
         // And back again!
         let seq_pos = num_tokens + out_tokens.len();
         res = model(
-            &Tensor::from_vec(vec![next_token], (1, 1), device)?.to_dtype(DType::BF16)?,
+            &Tensor::from_vec(vec![next_token], (1, 1), device)?,
             seq_pos,
             true,
         )?;
