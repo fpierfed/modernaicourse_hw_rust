@@ -568,9 +568,12 @@ impl LLM {
     ) -> Result<Self> {
         Ok(Self {
             embedding: Embedding::new(num_tokens, dim, device)?,
-            pos_embeddings: Var::from_tensor(
-                &Tensor::randn(0f32, 1.0f32, (max_seq, dim), device)?,
-            )?,
+            pos_embeddings: Var::from_tensor(&Tensor::randn(
+                0f32,
+                1.0f32,
+                (max_seq, dim),
+                device,
+            )?)?,
             layers: (0..num_layers)
                 .map(|_| TransformerBlock::new(dim, n_heads, ffn_dim, max_seq, device))
                 .collect::<Result<Vec<_>>>()?,
@@ -580,7 +583,8 @@ impl LLM {
     }
 
     pub fn to_dtype(&self, dtype: DType) -> Result<Self> {
-        let layers = self.layers
+        let layers = self
+            .layers
             .iter()
             .map(|l| l.to_dtype(dtype))
             .collect::<Result<Vec<_>>>()?;
@@ -950,7 +954,8 @@ where
     // gradients to Adam.
     for (x, y) in loader {
         let y_hat = model(&x)?;
-        let loss = cross_entropy_loss(&y_hat, &y)?;
+        // let loss = cross_entropy_loss(&y_hat, &y)?;
+        let loss = candle_nn::loss::cross_entropy(&y_hat.flatten(0, 1)?, &y.flatten(0, 1)?)?;
         let grads = loss.backward();
         optimizer.step(&grads);
     }
@@ -1079,7 +1084,7 @@ pub fn eval_llm(device: &Device) -> Result<LLM> {
     // GPT-2's vocab size is 50257, so:
     // - 50257 // 256 = 196
     // - (196 + 1) * 256 = 50432
-    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, device)?;
+    let mut model = LLM::new(50432, 256, 8, 512, 512, 4, device)?.to_dtype(DType::BF16)?;
 
     let mut opt = Adam::new(model.parameters(), 1.0e-3, (0.9, 0.95), 1.0e-8)?;
     {

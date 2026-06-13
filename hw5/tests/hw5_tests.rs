@@ -1,6 +1,6 @@
 //! Tests for hw5 — Candle version.
 
-use candle_core::{Device, Result, Tensor, Var};
+use candle_core::{DType, Device, Result, Tensor, Var};
 use hw5::*;
 use std::collections::HashMap;
 use std::io::Write;
@@ -916,7 +916,9 @@ fn test_eval_llm() -> Result<()> {
     let tokens = Tensor::from_vec(eval_tokens.clone(), (1, 48), &device)?;
 
     // Compute sequence loss.
-    let logits = model.forward(&tokens.narrow(1, 0, 47)?, 0, false)?;
+    let logits = model
+        .forward(&tokens.narrow(1, 0, 47)?, 0, false)?
+        .to_dtype(DType::F32)?;
     let vocab_size = logits.dims()[2];
     let logits_flat = logits.reshape((47, vocab_size))?;
     let targets = Tensor::from_vec(eval_tokens[1..].to_vec(), 47, &device)?;
@@ -926,7 +928,9 @@ fn test_eval_llm() -> Result<()> {
     let mut corrupted_tokens = eval_tokens.clone();
     corrupted_tokens[1..].reverse();
     let corrupted = Tensor::from_vec(corrupted_tokens.clone(), (1, 48), &device)?;
-    let c_logits = model.forward(&corrupted.narrow(1, 0, 47)?, 0, false)?;
+    let c_logits = model
+        .forward(&corrupted.narrow(1, 0, 47)?, 0, false)?
+        .to_dtype(DType::F32)?;
     let c_vocab_size = c_logits.dims()[2];
     let c_logits_flat = c_logits.reshape((47, c_vocab_size))?;
     let c_targets = Tensor::from_vec(corrupted_tokens[1..].to_vec(), 47, &device)?;
