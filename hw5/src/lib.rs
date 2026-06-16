@@ -954,8 +954,10 @@ where
     // gradients to Adam.
     for (x, y) in loader {
         let y_hat = model(&x)?;
-        // let loss = cross_entropy_loss(&y_hat, &y)?;
-        let loss = candle_nn::loss::cross_entropy(&y_hat.flatten(0, 1)?, &y.flatten(0, 1)?)?;
+        let loss = cross_entropy_loss(&y_hat, &y)?;
+        // An option is to use the candle cross_entropy_loss version which, in my fork at least, has
+        // a fused kernel which reduces memory usage to 1/3 or so.
+        // let loss = candle_nn::loss::cross_entropy(&y_hat.flatten(0, 1)?, &y.flatten(0, 1)?)?;
         let grads = loss.backward();
         optimizer.step(&grads);
     }
