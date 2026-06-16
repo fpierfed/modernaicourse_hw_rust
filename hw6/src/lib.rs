@@ -34,32 +34,43 @@
  * ### Question 7 - DPO Loss
  * L_DPO = softplus(-log(p(y+|x)/p_ref(y+|x)) + log(p(y-|x)/p_ref(y-|x)), beta)
  * softplus(x, beta) = log(1 + exp(beta*x))
- * Use torch.logaddexp for numerical stability.
+ * Use logaddexp for numerical stability.
  *
  * ### Question 8 - DPO training loop
  * Uses two data loaders (positive and negative examples) iterated simultaneously.
  * Computes DPO loss and takes optimization steps.
  */
 
-use burn::backend::ndarray::{NdArray, NdArrayDevice};
-use burn::backend::Autodiff;
-use burn::tensor::Int;
-#[allow(unused_imports)]
-use burn::tensor::{Tensor, TensorData};
+use candle_core::{Device, Result, Tensor};
 use std::path::Path;
 
-pub type B = Autodiff<NdArray<f32>>;
-pub type Device = NdArrayDevice;
-pub type ModelFn = Box<dyn FnMut(Tensor<B, 2, Int>, usize, bool) -> Tensor<B, 3>>;
+pub const DEVICE: Device = Device::Cpu;
 
-pub const DEVICE: Device = NdArrayDevice::Cpu;
+pub fn default_device() -> Result<Device> {
+    #[cfg(feature = "cuda")]
+    {
+        Device::new_cuda(0)
+    }
+    #[cfg(all(feature = "metal", not(feature = "cuda")))]
+    {
+        Device::new_metal(0)
+    }
+    #[cfg(not(any(feature = "cuda", feature = "metal")))]
+    {
+        Ok(Device::Cpu)
+    }
+}
+
+/// Model forward function: takes a token tensor, sequence position, and KV cache
+/// flag, returning logits.
+pub type ModelFn = Box<dyn FnMut(&Tensor, usize, bool) -> Result<Tensor>>;
 
 // ============================================================
 // Part I: Chat Format and SFT
 // ============================================================
 
-/// Convert a list of chat messages (role/content dicts) into a single tagged text string.
-/// Uses <USER></USER> and <ASSISTANT></ASSISTANT> tags.
+/// Convert a list of chat messages (role/content pairs) into a single tagged text
+/// string. Uses <USER></USER> and <ASSISTANT></ASSISTANT> tags.
 pub fn messages_to_chat_format(_messages: &[(String, String)]) -> String {
     todo!()
 }
@@ -84,14 +95,20 @@ pub fn get_loss_mask(
 }
 
 /// Chat data loader yielding (x, y, mask) triples.
+///
+/// `x` and `y` are integer token tensors of shape (batch_size, seq_len);
+/// `mask` is an f32 tensor of the same shape with 1.0 on tokens that contribute
+/// to the loss and 0.0 elsewhere (padding included).
 pub struct DataLoaderChat {}
+
 impl DataLoaderChat {
     pub fn new(_filename: &Path, _seq_len: usize, _batch_size: usize) -> Self {
         todo!()
     }
 }
+
 impl Iterator for DataLoaderChat {
-    type Item = (Tensor<B, 2, Int>, Tensor<B, 2, Int>, Tensor<B, 2, Int>);
+    type Item = (Tensor, Tensor, Tensor);
     fn next(&mut self) -> Option<Self::Item> {
         todo!()
     }
@@ -99,7 +116,7 @@ impl Iterator for DataLoaderChat {
 
 /// Run one pass of supervised chat finetuning with a masked next-token loss.
 pub fn train_chat_sft(
-    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
     _loader: &mut DataLoaderChat,
     _optimizer: &mut dyn FnMut(),
     _max_iter: Option<usize>,
@@ -112,18 +129,14 @@ pub fn train_chat_sft(
 // ============================================================
 
 /// Compute masked sequence log probabilities for each batch element.
-/// Returns tensor of shape (batch_size,) with summed masked log-probs.
-pub fn log_probs(
-    _logits: Tensor<B, 3>,
-    _y: Tensor<B, 2, Int>,
-    _mask: Tensor<B, 2>,
-) -> Tensor<B, 1> {
+/// Returns a 1-D tensor of shape (batch_size,) with summed masked log-probs.
+pub fn log_probs(_logits: &Tensor, _y: &Tensor, _mask: &Tensor) -> Result<Tensor> {
     todo!()
 }
 
 /// softplus(x, beta) = log(1 + exp(beta * x))
 /// Use logaddexp for numerical stability.
-pub fn softplus(_x: Tensor<B, 1>, _beta: f64) -> Tensor<B, 1> {
+pub fn softplus(_x: &Tensor, _beta: f64) -> Result<Tensor> {
     todo!()
 }
 
@@ -132,23 +145,23 @@ pub fn softplus(_x: Tensor<B, 1>, _beta: f64) -> Tensor<B, 1> {
 /// L_DPO = softplus(-log(p(y+|x)/p_ref(y+|x)) + log(p(y-|x)/p_ref(y-|x)), beta)
 #[allow(clippy::too_many_arguments)]
 pub fn dpo_loss(
-    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
-    _model_ref: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
-    _xp: Tensor<B, 2, Int>,
-    _yp: Tensor<B, 2, Int>,
-    _maskp: Tensor<B, 2>,
-    _xn: Tensor<B, 2, Int>,
-    _yn: Tensor<B, 2, Int>,
-    _maskn: Tensor<B, 2>,
+    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
+    _model_ref: &dyn Fn(&Tensor) -> Result<Tensor>,
+    _xp: &Tensor,
+    _yp: &Tensor,
+    _maskp: &Tensor,
+    _xn: &Tensor,
+    _yn: &Tensor,
+    _maskn: &Tensor,
     _beta: f64,
-) -> Tensor<B, 1> {
+) -> Result<Tensor> {
     todo!()
 }
 
 /// Run one pass of DPO finetuning over paired positive and negative minibatches.
 pub fn train_dpo(
-    _model: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
-    _model_ref: &dyn Fn(Tensor<B, 2, Int>) -> Tensor<B, 3>,
+    _model: &dyn Fn(&Tensor) -> Result<Tensor>,
+    _model_ref: &dyn Fn(&Tensor) -> Result<Tensor>,
     _loader_pos: &mut DataLoaderChat,
     _loader_neg: &mut DataLoaderChat,
     _optimizer: &mut dyn FnMut(),
@@ -162,7 +175,7 @@ pub fn train_dpo(
 ///
 /// The returned model should be trained via supervised finetuning on chat data
 /// and achieve lower loss than the base model on heldout chat conversations.
-pub fn eval_llm_chat() -> ModelFn {
+pub fn eval_llm_chat() -> Result<ModelFn> {
     todo!()
 }
 
@@ -170,6 +183,6 @@ pub fn eval_llm_chat() -> ModelFn {
 ///
 /// The returned model should be trained via DPO on preference data and achieve
 /// < 0.55 heldout DPO loss against the chat-finetuned reference model.
-pub fn eval_llm_dpo() -> ModelFn {
+pub fn eval_llm_dpo() -> Result<ModelFn> {
     todo!()
 }
